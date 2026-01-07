@@ -1,11 +1,7 @@
 from fastapi import FastAPI
-from app.core.database import Base, engine
 from app.routers.admin import admin_router
 from app.routers.internal import internal_router
 from app.routers.public import public_router
-
-
-Base.metadata.create_all(bind=engine)
 
 
 app = FastAPI(
