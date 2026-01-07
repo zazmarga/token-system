@@ -1,10 +1,13 @@
-from sqlalchemy import create_engine
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
-from app.core.config import DATABASE_URL
+from app.core.config import config
 
 
-engine = create_engine(DATABASE_URL, echo=True)  # echo=True для дебагу (!)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
+engine = create_async_engine(config.DATABASE_URL, echo=config.DEBUG_MODE)  # echo=True для дебагу (!)
+async_session=sessionmaker(
+	bind=engine,
+	expire_on_commit=False,
+	class_=AsyncSession
+)
 
 Base = declarative_base()
