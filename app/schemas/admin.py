@@ -13,3 +13,4 @@ class ExchangeRateResponse(BaseModel):
 
 	class Config:
 		from_attributes = True
+
