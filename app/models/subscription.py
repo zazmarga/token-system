@@ -4,7 +4,7 @@ from app.core.database import Base
 
 
 class SubscriptionPlan(Base):
-	__tablename__ = "subscription_planes"
+	__tablename__ = "subscription_plans"
 
 	tier = Column(String(24), primary_key=True)
 	name =  Column(String(24), nullable=False, unique=True)

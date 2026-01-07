@@ -6,8 +6,11 @@ from app.core.dependencies import access_admin, get_db
 from app.models.settings import Settings
 from app.models.subscription import SubscriptionPlan
 from app.schemas.admin import ExchangeRateResponse, ExchangeRateUpdate
-from app.schemas.subscription import SubscriptionPlanResponse, SubscriptionPlanCreate
-
+from app.schemas.subscription import (
+    SubscriptionPlanResponse,
+    SubscriptionPlanCreate,
+    SubscriptionPlanUpdate
+)
 
 # Admin API
 admin_router = APIRouter(prefix="/api/admin", tags=["Admin API"])
@@ -25,7 +28,7 @@ admin_router = APIRouter(prefix="/api/admin", tags=["Admin API"])
             "description": "Forbidden.",
             "content": {
                 "application/json": {
-                    "example": {"detail": "Invalid admin token"}
+                    "example": {"detail": "Invalid admin token."}
                 },
             },
         },
@@ -83,7 +86,7 @@ async def update_exchange_rate(
             "description": "Forbidden.",
             "content": {
                 "application/json": {
-                    "example": {"detail": "Invalid admin token"}
+                    "example": {"detail": "Invalid admin token."}
                 },
             },
         },
@@ -105,7 +108,7 @@ async def update_exchange_rate(
         },
     },
 )
-async def create_subscription_plane(
+async def create_subscription_plan(
         payload: SubscriptionPlanCreate,
         db: AsyncSession = Depends(get_db)
 ):
@@ -131,3 +134,53 @@ async def create_subscription_plane(
     await db.commit()
     await db.refresh(new_plan)
     return SubscriptionPlanResponse(success=True, plan=new_plan)
+
+
+@admin_router.put(
+    "/subscription-plans/{tier}",
+    dependencies=[Depends(access_admin)],
+    summary="Оновлення тарифного плану",
+    description="Доступ лише для адміністратора. Headers: X-Admin-Token",
+    response_model=SubscriptionPlanResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        403: {
+            "description": "Forbidden.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Invalid admin token."}
+                },
+            },
+        },
+        404: {
+            "description": "Not found.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Plan not found."}
+                },
+            },
+        },
+        500: {
+            "description": "Internal Server Error.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Internal Server Error."}
+                }
+            },
+        },
+    },
+)
+async def create_subscription_plan(
+        tier: str,
+        payload: SubscriptionPlanUpdate,
+        db: AsyncSession = Depends(get_db)
+):
+    plan = await db.get(SubscriptionPlan, tier)
+    if not plan:
+        raise HTTPException(status_code=404, detail=f"Plan '{tier}' not found")
+
+    for k, v in payload.model_dump(exclude_unset=True, exclude_none=True).items():
+        setattr(plan, k, v)
+        await db.commit()
+        await db.refresh(plan)
+    return SubscriptionPlanResponse(success=True, plan=plan)
