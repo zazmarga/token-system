@@ -1,3 +1,5 @@
+from mailbox import Message
+
 from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,7 +11,7 @@ from app.schemas.admin import ExchangeRateResponse, ExchangeRateUpdate
 from app.schemas.subscription import (
     SubscriptionPlanResponse,
     SubscriptionPlanCreate,
-    SubscriptionPlanUpdate
+    SubscriptionPlanUpdate,
 )
 
 # Admin API
@@ -170,7 +172,7 @@ async def create_subscription_plan(
         },
     },
 )
-async def create_subscription_plan(
+async def update_subscription_plan(
         tier: str,
         payload: SubscriptionPlanUpdate,
         db: AsyncSession = Depends(get_db)
@@ -184,3 +186,53 @@ async def create_subscription_plan(
         await db.commit()
         await db.refresh(plan)
     return SubscriptionPlanResponse(success=True, plan=plan)
+
+
+@admin_router.delete(
+    "/subscription-plans/{tier}",
+    dependencies=[Depends(access_admin)],
+    summary="Видалення тарифного плану",
+    description="Доступ лише для адміністратора. Headers: X-Admin-Token",
+    status_code=status.HTTP_200_OK,
+    response_model=dict,
+    responses={
+        403: {
+            "description": "Forbidden.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Invalid admin token."}
+                },
+            },
+        },
+        404: {
+            "description": "Not found.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Plan not found."}
+                },
+            },
+        },
+        500: {
+            "description": "Internal Server Error.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Internal Server Error."}
+                }
+            },
+        },
+    },
+)
+async def delete_subscription_plan(
+        tier: str,
+        db: AsyncSession = Depends(get_db)
+):
+    plan = await db.get(SubscriptionPlan, tier)
+    if not plan:
+        raise HTTPException(status_code=404, detail=f"Plan '{tier}' not found")
+    await db.delete(plan)
+    await db.commit()
+    return {
+        "success": True,
+        "message": "Subscription plan deleted",
+        "tier": tier
+    }
