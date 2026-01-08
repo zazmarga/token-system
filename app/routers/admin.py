@@ -16,6 +16,7 @@ from app.schemas.subscription import (
     SubscriptionPlanList,
     SubscriptionPlanDetail,
     MultiplierUpdateResponse,
+    PurchaseRateUpdateResponse,
 )
 
 # Admin API
@@ -351,5 +352,62 @@ async def update_multiplier(
         tier=tier,
         old_multiplier=old_multiplier,
         new_multiplier=multiplier,
+        updated_at=plan.updated_at
+    )
+
+
+@admin_router.patch(
+    "/subscription-plans/{tier}/purchase-rate",
+    dependencies=[Depends(access_admin)],
+    summary="Оновлення ставки покупки кредитів для тарифного плану",
+    description="Доступ лише для адміністратора. Headers: X-Admin-Token",
+    response_model=PurchaseRateUpdateResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        403: {
+            "description": "Forbidden.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Invalid admin token."}
+                },
+            },
+        },
+        404: {
+            "description": "Not found.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Plan not found."}
+                },
+            },
+        },
+        500: {
+            "description": "Internal Server Error.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Internal Server Error."}
+                }
+            },
+        },
+    },
+)
+async def update_purchase_rate(
+        tier: str,
+        purchase_rate: float,
+        db: AsyncSession = Depends(get_db)
+):
+    plan = await db.get(SubscriptionPlan, tier)
+    if not plan:
+        raise HTTPException(status_code=404, detail=f"Plan '{tier}' not found")
+
+    old_purchase_rate = plan.purchase_rate
+    plan.purchase_rate = purchase_rate
+    await db.commit()
+    await db.refresh(plan)
+
+    return PurchaseRateUpdateResponse(
+        success=True,
+        tier=tier,
+        old_purchase_rate=old_purchase_rate,
+        new_purchase_rate=purchase_rate,
         updated_at=plan.updated_at
     )

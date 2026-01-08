@@ -58,3 +58,12 @@ class MultiplierUpdateResponse(BaseModel):
 	old_multiplier: float
 	new_multiplier: float
 	updated_at: datetime
+
+
+class PurchaseRateUpdateResponse(BaseModel):
+	success: bool = True
+	tier: str
+	old_purchase_rate: float
+	new_purchase_rate: float
+	updated_at: datetime
+
