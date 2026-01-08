@@ -12,7 +12,10 @@ from app.schemas.admin import ExchangeRateResponse, ExchangeRateUpdate
 from app.schemas.subscription import (
     SubscriptionPlanResponse,
     SubscriptionPlanCreate,
-    SubscriptionPlanUpdate, SubscriptionPlanList, SubscriptionPlanDetail,
+    SubscriptionPlanUpdate,
+    SubscriptionPlanList,
+    SubscriptionPlanDetail,
+    MultiplierUpdateResponse,
 )
 
 # Admin API
@@ -293,3 +296,60 @@ async def list_subscription_plans(
     ]
 
     return SubscriptionPlanList(plans=plans_with_counts)
+
+
+@admin_router.patch(
+    "/subscription-plans/{tier}/multiplier",
+    dependencies=[Depends(access_admin)],
+    summary="Оновлення коефіцієнту списання для тарифного плану",
+    description="Доступ лише для адміністратора. Headers: X-Admin-Token",
+    response_model=MultiplierUpdateResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        403: {
+            "description": "Forbidden.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Invalid admin token."}
+                },
+            },
+        },
+        404: {
+            "description": "Not found.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Plan not found."}
+                },
+            },
+        },
+        500: {
+            "description": "Internal Server Error.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Internal Server Error."}
+                }
+            },
+        },
+    },
+)
+async def update_multiplier(
+        tier: str,
+        multiplier: float,
+        db: AsyncSession = Depends(get_db)
+):
+    plan = await db.get(SubscriptionPlan, tier)
+    if not plan:
+        raise HTTPException(status_code=404, detail=f"Plan '{tier}' not found")
+
+    old_multiplier = plan.multiplier
+    plan.multiplier = multiplier
+    await db.commit()
+    await db.refresh(plan)
+
+    return MultiplierUpdateResponse(
+        success=True,
+        tier=tier,
+        old_multiplier=old_multiplier,
+        new_multiplier=multiplier,
+        updated_at=plan.updated_at
+    )

@@ -50,3 +50,11 @@ class SubscriptionPlanDetail(SubscriptionPlanOut):
 
 class SubscriptionPlanList(BaseModel):
 	plans: List[SubscriptionPlanDetail]
+
+
+class MultiplierUpdateResponse(BaseModel):
+	success: bool = True
+	tier: str
+	old_multiplier: float
+	new_multiplier: float
+	updated_at: datetime
