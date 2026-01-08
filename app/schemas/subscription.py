@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import List
 
 from pydantic import BaseModel
 
@@ -41,3 +42,11 @@ class SubscriptionPlanUpdate(BaseModel):
 	multiplier: float | None = None
 	purchase_rate: float | None = None
 	active: bool | None = None
+
+
+class SubscriptionPlanDetail(SubscriptionPlanOut):
+	users_count: int
+
+
+class SubscriptionPlanList(BaseModel):
+	plans: List[SubscriptionPlanDetail]

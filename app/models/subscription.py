@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, String, DECIMAL, Boolean, DateTime, func
+from sqlalchemy.orm import relationship
 
 from app.core.database import Base
 
@@ -17,6 +18,8 @@ class SubscriptionPlan(Base):
 	active = Column(Boolean, default=True)
 	created_at = Column(DateTime, server_default=func.now())
 	updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+	users = relationship("User", back_populates="subscription")
 
 
 class Subscription(Base):

@@ -1,17 +1,18 @@
 from mailbox import Message
 
 from fastapi import APIRouter, Depends, status, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import access_admin, get_db
+from app.models.user import User
 from app.models.settings import Settings
 from app.models.subscription import SubscriptionPlan
 from app.schemas.admin import ExchangeRateResponse, ExchangeRateUpdate
 from app.schemas.subscription import (
     SubscriptionPlanResponse,
     SubscriptionPlanCreate,
-    SubscriptionPlanUpdate,
+    SubscriptionPlanUpdate, SubscriptionPlanList, SubscriptionPlanDetail,
 )
 
 # Admin API
@@ -236,3 +237,59 @@ async def delete_subscription_plan(
         "message": "Subscription plan deleted",
         "tier": tier
     }
+
+
+@admin_router.get(
+    "/subscription-plans",
+    dependencies=[Depends(access_admin)],
+    summary="Отримання списку тарифних планів з кількістю користувачів",
+    description="Доступ лише для адміністратора. Headers: X-Admin-Token",
+    response_model=SubscriptionPlanList,
+    status_code=status.HTTP_200_OK,
+    responses={
+        403: {
+            "description": "Forbidden.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Invalid admin token."}
+                },
+            },
+        },
+        500: {
+            "description": "Internal Server Error.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Internal Server Error."}
+                }
+            },
+        },
+    },
+)
+async def list_subscription_plans(
+    active_only: bool = False,
+    db: AsyncSession = Depends(get_db)
+):
+    query = (
+        select(
+            SubscriptionPlan,
+            func.count(User.id).label("users_count")
+        )
+        .outerjoin(User, User.subscription_tier == SubscriptionPlan.tier)
+        .group_by(SubscriptionPlan.tier)
+    )
+
+    if active_only:
+        query = query.where(SubscriptionPlan.active.is_(True))
+
+    result = await db.execute(query)
+    rows = result.all()
+
+    plans_with_counts = [
+        SubscriptionPlanDetail(
+            **row.SubscriptionPlan.__dict__,
+            users_count=row.users_count
+        )
+        for row in rows
+    ]
+
+    return SubscriptionPlanList(plans=plans_with_counts)
