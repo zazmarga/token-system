@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DECIMAL, Boolean, DateTime, func
+from sqlalchemy import Column, Integer, String, DECIMAL, Boolean, DateTime, func, ForeignKey
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
@@ -19,10 +19,15 @@ class SubscriptionPlan(Base):
 	created_at = Column(DateTime, server_default=func.now())
 	updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
-	users = relationship("User", back_populates="subscription")
+	subscriptions = relationship("Subscription", back_populates="plan")
 
 
 class Subscription(Base):
 	__tablename__ = "subscriptions"
 
 	id = Column(Integer, primary_key=True)
+	user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+	plan_id = Column(String(24), ForeignKey("subscription_plans.tier"), nullable=False)
+
+	user = relationship("User", back_populates="subscription")
+	plan = relationship("SubscriptionPlan", back_populates="subscriptions")

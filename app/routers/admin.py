@@ -1,5 +1,3 @@
-from mailbox import Message
-
 from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import access_admin, get_db
 from app.models.user import User
 from app.models.settings import Settings
-from app.models.subscription import SubscriptionPlan
+from app.models.subscription import SubscriptionPlan, Subscription
 from app.schemas.admin import ExchangeRateResponse, ExchangeRateUpdate
 from app.schemas.subscription import (
     SubscriptionPlanResponse,
@@ -278,7 +276,8 @@ async def list_subscription_plans(
             SubscriptionPlan,
             func.count(User.id).label("users_count")
         )
-        .outerjoin(User, User.subscription_tier == SubscriptionPlan.tier)
+        .outerjoin(Subscription,Subscription.plan_id == SubscriptionPlan.tier)
+        .outerjoin(User, User.id == Subscription.user_id)
         .group_by(SubscriptionPlan.tier)
     )
 

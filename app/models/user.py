@@ -5,17 +5,19 @@ from app.core.database import Base
 
 
 class User(Base):
-	__tablename__ = "user"
+    __tablename__ = "users"
 
-	id = Column(Integer, primary_key=True, index=True)
-	subscription_tier = Column(
-		String,
-		ForeignKey("subscription_plans.tier", ondelete="RESTRICT"),
-		nullable=True
-	)
-	# ORM-зв’язок
-	subscription = relationship("SubscriptionPlan", back_populates="users")
+    id = Column(Integer, primary_key=True, index=True)
 
-	@property
-	def public_id(self) -> str:
-		return f"user_{self.id}"
+    # один користувач має один запис у Subscription
+    subscription = relationship("Subscription", back_populates="user", uselist=False)
+
+    # один користувач має один запис у Credits
+    credit = relationship("Credits", back_populates="user", uselist=False)
+
+    # один користувач має багато записів у Transaction
+    transactions = relationship("Transaction", back_populates="user")
+
+    @property
+    def user_id(self) -> str:
+        return f"user_{self.id}"
