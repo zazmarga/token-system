@@ -1,19 +1,22 @@
 from datetime import datetime
 from typing import List
 
-from pydantic import BaseModel
+from pydantic import BaseModel, computed_field
 
 
 class SubscriptionPlanBase(BaseModel):
-    tier: str
-    name: str
-    monthly_cost: float
-    fixed_cost: float
-    credits_included: int
-    bonus_credits: int
-    multiplier: float
-    purchase_rate: float
-    active: bool = True
+	tier: str
+	name: str
+	monthly_cost: float
+	fixed_cost: float
+	credits_included: int
+	bonus_credits: int
+	multiplier: float
+	purchase_rate: float
+	# active: bool = True
+
+	class Config:
+		from_attributes = True
 
 
 class SubscriptionPlanCreate(SubscriptionPlanBase):
@@ -21,6 +24,7 @@ class SubscriptionPlanCreate(SubscriptionPlanBase):
 
 
 class SubscriptionPlanOut(SubscriptionPlanBase):
+	active: bool
 	created_at: datetime
 	updated_at: datetime
 
@@ -67,3 +71,13 @@ class PurchaseRateUpdateResponse(BaseModel):
 	new_purchase_rate: float
 	updated_at: datetime
 
+
+class SubscriptionPlanPublicDetail(SubscriptionPlanBase):
+	@computed_field
+	@property
+	def total_credits(self) -> int:
+		return self.credits_included + self.bonus_credits
+
+
+class SubscriptionPlanPublicList(BaseModel):
+	plans: List[SubscriptionPlanPublicDetail]
