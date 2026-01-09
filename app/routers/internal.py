@@ -8,10 +8,17 @@ from sqlalchemy.orm import selectinload
 
 from app.core.dependencies import access_internal, get_db
 from app.utils.idempotency import check_idempotency
-from app.models import Subscription, User, Transaction, Credits, TransactionType, TransactionSource, SubscriptionPlan
-from app.schemas.credits import CreditsUserBalanceResponse, CreditsBase, CreditsUserCheckResponse, CreditsAddResponse, \
-    CreditsAddRequest
-from app.schemas.subscription import SubscriptionUpdateResponse, SubscriptionUpdateRequest, SubscriptionPlanInternal
+from app.models import (
+    Subscription, User, Transaction, Credits, TransactionType,
+    TransactionSource, SubscriptionPlan, Settings
+)
+from app.schemas.credits import (
+    CreditsUserBalanceResponse, CreditsBase, CreditsUserCheckResponse,
+    CreditsAddResponse, CreditsAddRequest
+)
+from app.schemas.subscription import (
+    SubscriptionUpdateResponse, SubscriptionUpdateRequest,
+    SubscriptionPlanInternal)
 
 # Internal API (для інших внутрішніх сервісів)
 internal_router = APIRouter(prefix="/api/internal", tags=["Internal API"])
@@ -45,7 +52,9 @@ internal_router = APIRouter(prefix="/api/internal", tags=["Internal API"])
             "description": "Conflict.",
             "content": {
                 "application/json": {
-                    "example": {"detail": "Transaction already exists."}
+                    "example": {
+                        "detail": "Operation ID already used for different operation type"
+                    }
                 },
             },
         },
@@ -152,9 +161,6 @@ async def create_subscription_plan(
         )
         db.add(new_tx)
         await db.commit()
-    # await db.refresh(user_subscription)
-    # await db.refresh(user_credit)
-    # await db.refresh(new_tx)
 
     return SubscriptionUpdateResponse(
         success=True,
@@ -345,4 +351,159 @@ async def user_credits_checking(
         balance=balance,
         sufficient=sufficient,
         multiplier=multiplier,
+    )
+
+
+@internal_router.post(
+    "/credits/add",
+    dependencies=[Depends(access_internal)],
+    summary="Додавання кредитів: поповнення балансу",
+    description="Лише внутрішний доступ. Headers: X-Service-Token",
+    response_model=CreditsAddResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        403: {
+            "description": "Forbidden.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Invalid service token."}
+                },
+            },
+        },
+        404: {
+            "description": "Not found.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "User not found."}
+                },
+            },
+        },
+        409: {
+            "description": "Conflict.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Operation ID already used for different operation type"
+                    }
+                },
+            },
+        },
+        500: {
+            "description": "Internal Server Error.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Internal Server Error."}
+                }
+            },
+        },
+    },
+)
+async def user_credits_add(
+        payload: CreditsAddRequest,
+        db: AsyncSession = Depends(get_db)
+):
+    user_id = payload.user_id
+    user = await db.get(User, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User '{user_id}' not found.",
+        )
+
+    # Перевіряємо ідемпотентність
+    operation_id = payload.operation_id
+    is_duplicate, existing_tx = await check_idempotency(
+        db=db,
+        operation_id=operation_id,
+        expected_type=TransactionType.ADD.value
+    )
+
+    if is_duplicate and existing_tx is not None:
+        metadata = existing_tx.info
+        # Повертаємо той самий результат, що був раніше
+        return CreditsAddResponse(
+            success=True,
+            transaction_id=existing_tx.id,
+            user_id=existing_tx.user_id,
+            amount_usd=existing_tx.amount_usd,
+            credits_added=existing_tx.credits,
+            purchase_rate=metadata.get("purchase_rate"),
+            balance_before=existing_tx.balance_before,
+            balance_after=existing_tx.balance_after,
+            operation_id=existing_tx.operation_id
+        )
+
+    # завантажуємо підписку разом із планом
+    result = await db.execute(
+        select(Subscription)
+        .options(selectinload(Subscription.plan))
+        .where(Subscription.user_id == user_id)
+    )
+    subscription: Subscription | None = result.scalar_one_or_none()
+    if not subscription:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Not found: user '{user_id}' does not have subscription.",
+        )
+    purchase_rate = float(subscription.plan.purchase_rate)
+
+    # завантаження базового курсу конвертації
+    settings = await db.execute(select(Settings))
+    settings = settings.scalars().first()
+    if not settings:
+        settings = Settings()
+        db.add(settings)
+        await db.commit()
+    base_rate = settings.base_rate
+
+    # розрахунок суми кредитів з урахуванням бонусу підписки
+    amount_usd = payload.amount_usd
+    credits_added = round(amount_usd * purchase_rate * base_rate)
+
+    # кредити
+    result = await db.execute(select(Credits).where(Credits.user_id == user_id))
+    user_credits: Credits | None = result.scalar_one_or_none()
+    if not user_credits:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Not found: user '{user_id}' does not have subscription.",
+        )
+
+    # оновити кредити та створити транзакцію
+    async with db.begin_nested():
+        # оновити кредити
+        user_credits.total_earned += credits_added
+        balance_before = user_credits.balance
+        user_credits.balance += credits_added
+        balance_after = balance_before + credits_added
+
+        # транзакція
+        new_tx = Transaction(
+            id=f"txn_{operation_id}",
+            user_id=user_id,
+            operation_id=operation_id,
+            type=TransactionType.ADD,
+            source=TransactionSource.PURCHASE,
+            credits=credits_added,
+            balance_before=balance_before,
+            balance_after=balance_after,
+            description=payload.description,
+            created_at=datetime.now(timezone.utc),
+            info={
+                "purchase_rate": float(purchase_rate)
+            }
+        )
+        db.add(new_tx)
+        await db.commit()
+
+    return CreditsAddResponse(
+        success=True,
+        transaction_id=new_tx.id,
+        user_id=user_id,
+        amount_usd=amount_usd,
+        credits_added=credits_added,
+        purchase_rate=purchase_rate,
+        balance_before=balance_before,
+        balance_after=balance_after,
+        operation_id=operation_id
     )

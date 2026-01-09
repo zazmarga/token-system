@@ -1,6 +1,6 @@
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.subscription import SubscriptionPlanInternal
 
@@ -28,3 +28,24 @@ class CreditsUserCheckResponse(BaseModel):
 	balance: int
 	sufficient: bool
 	multiplier: float
+
+
+class CreditsAddRequest(BaseModel):
+	user_id: str
+	amount_usd: float = Field(..., gt=0)
+	source: str
+	operation_id: str
+	description: str
+	metadata: dict
+
+
+class CreditsAddResponse(BaseModel):
+	success: bool = True
+	transaction_id: str
+	user_id: str
+	amount_usd: float
+	credits_added: int
+	purchase_rate: float
+	balance_before: int
+	balance_after: int
+	operation_id: str

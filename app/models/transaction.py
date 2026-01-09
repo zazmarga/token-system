@@ -27,7 +27,7 @@ class Transaction(Base):
     source = Column(Enum(TransactionSource), nullable=True)  # уточнення походження
 
     operation_id = Column(String, unique=True, nullable=False)  # для ідемпотентності
-    cost_usd = Column(Float, nullable=True)
+    amount_usd = Column(Float, nullable=True)
     credits = Column(Integer, nullable=False)  # + або - кількість
     balance_before = Column(Integer, nullable=False)
     balance_after = Column(Integer, nullable=False)
