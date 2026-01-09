@@ -8,6 +8,7 @@ class AppConfig(BaseSettings):
     POSTGRES_HOST: str
     POSTGRES_PORT: str
     ADMIN_TOKEN: str
+    SERVICE_TOKEN: str
     DEBUG_MODE: bool = False
 
     @property
