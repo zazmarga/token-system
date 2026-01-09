@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from typing import Optional
 
 from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy import select
@@ -6,8 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.dependencies import access_internal, get_db
-from app.models import Subscription, User, Transaction, Credits, TransactionType, TransactionSource
-from app.schemas.credits import CreditsUserBalanceResponse, CreditsBase
+from app.models import Subscription, User, Transaction, Credits, TransactionType, TransactionSource, SubscriptionPlan
+from app.schemas.credits import CreditsUserBalanceResponse, CreditsBase, CreditsUserCheckResponse
 from app.schemas.subscription import SubscriptionUpdateResponse, SubscriptionUpdateRequest, SubscriptionPlanInternal
 
 # Internal API (для інших внутрішніх сервісів)
@@ -174,7 +175,7 @@ async def create_subscription_plan(
         },
     },
 )
-async def credits_balance_user(
+async def user_credits_balance(
     user_id: str,
     db: AsyncSession = Depends(get_db)
 ):
@@ -213,7 +214,6 @@ async def credits_balance_user(
     result = await db.execute(select(Credits).where(Credits.user_id == user_id))
     user_credits = result.scalar_one_or_none()
 
-
     return CreditsUserBalanceResponse(
         user_id=user_id,
         subscription=SubscriptionPlanInternal(
@@ -228,3 +228,96 @@ async def credits_balance_user(
             total_spent=user_credits.total_spent
         )
     )
+
+
+@internal_router.get(
+    "/credits/check/{user_id}",
+    dependencies=[Depends(access_internal)],
+    summary="Перевірка наявності кредитів",
+    description="Лише внутрішний доступ. Headers: X-Service-Token",
+    response_model=CreditsUserCheckResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        403: {
+            "description": "Forbidden.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Invalid service token."}
+                },
+            },
+        },
+        404: {
+            "description": "Not found.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "User not found."}
+                },
+            },
+        },
+        500: {
+            "description": "Internal Server Error.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Internal Server Error."}
+                }
+            },
+        },
+    },
+)
+async def user_credits_checking(
+    user_id: str,
+    required_credits: Optional[int] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    user = await db.get(User, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User '{user_id}' not found.",
+        )
+
+    # завантажуємо підписку разом із планом
+    result = await db.execute(
+        select(
+            Subscription,
+            SubscriptionPlan.tier,
+            SubscriptionPlan.multiplier
+        )
+        .outerjoin(SubscriptionPlan,
+                   Subscription.plan_id == SubscriptionPlan.tier)
+        .where(Subscription.user_id == user_id)
+    )
+    row = result.first()
+    if not row:
+        return CreditsUserCheckResponse(
+            user_id=user_id,
+            has_subscription=False,
+            subscription_tier=None,
+            balance=0,
+            sufficient=False,
+            multiplier=1
+        )
+
+    subscription, tier, multiplier = row
+
+    # кредити
+    balance_result = await db.execute(
+        select(Credits.balance).where(Credits.user_id == user_id)
+    )
+    balance: int = balance_result.scalar_one_or_none() or 0
+
+    if required_credits is None:
+        sufficient = True
+    else:
+        sufficient = balance >= required_credits
+
+    return CreditsUserCheckResponse(
+        user_id=user_id,
+        has_subscription=True,
+        subscription_tier=tier,
+        balance=balance,
+        sufficient=sufficient,
+        multiplier=multiplier,
+    )
+
+
