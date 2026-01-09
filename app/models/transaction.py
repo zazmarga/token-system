@@ -21,7 +21,7 @@ class Transaction(Base):
     __tablename__ = "transactions"
 
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False)
 
     type = Column(Enum(TransactionType), nullable=False)
     source = Column(Enum(TransactionSource), nullable=True)  # уточнення походження
@@ -34,6 +34,6 @@ class Transaction(Base):
 
     description = Column(String, nullable=True)
     info = Column(JSON, default={})   # metadata (!)
-    created_at = Column(DateTime, default=func.now(), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     user = relationship("User", back_populates="transactions")

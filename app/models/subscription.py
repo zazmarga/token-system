@@ -8,7 +8,7 @@ class SubscriptionPlan(Base):
 	__tablename__ = "subscription_plans"
 
 	tier = Column(String(24), primary_key=True)
-	name =  Column(String(24), nullable=False, unique=True)
+	name = Column(String(24), nullable=False, unique=True)
 	monthly_cost = Column(DECIMAL(8, 2), nullable=False)
 	fixed_cost = Column(DECIMAL(8, 2), nullable=False)
 	credits_included = Column(Integer, nullable=False)
@@ -26,8 +26,10 @@ class Subscription(Base):
 	__tablename__ = "subscriptions"
 
 	id = Column(Integer, primary_key=True)
-	user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+	user_id = Column(String, ForeignKey("users.id"), unique=True, nullable=False)
 	plan_id = Column(String(24), ForeignKey("subscription_plans.tier"), nullable=False)
+	created_at = Column(DateTime, server_default=func.now(), nullable=False)
+	updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
 	user = relationship("User", back_populates="subscription")
 	plan = relationship("SubscriptionPlan", back_populates="subscriptions")

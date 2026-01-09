@@ -1,9 +1,10 @@
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 from pydantic import BaseModel, computed_field
 
 
+#  Admin endpoints
 class SubscriptionPlanBase(BaseModel):
 	tier: str
 	name: str
@@ -20,7 +21,7 @@ class SubscriptionPlanBase(BaseModel):
 
 
 class SubscriptionPlanCreate(SubscriptionPlanBase):
-	pass
+	active: bool
 
 
 class SubscriptionPlanOut(SubscriptionPlanBase):
@@ -72,6 +73,7 @@ class PurchaseRateUpdateResponse(BaseModel):
 	updated_at: datetime
 
 
+# Public endpoints
 class SubscriptionPlanPublicDetail(SubscriptionPlanBase):
 	@computed_field
 	@property
@@ -81,3 +83,22 @@ class SubscriptionPlanPublicDetail(SubscriptionPlanBase):
 
 class SubscriptionPlanPublicList(BaseModel):
 	plans: List[SubscriptionPlanPublicDetail]
+
+
+# Internal endpoints
+class SubscriptionUpdateRequest(BaseModel):
+	user_id: str
+	subscription_tier: str
+	credits_to_add: int
+	operation_id: str
+
+
+class SubscriptionUpdateResponse(BaseModel):
+	success: bool = True
+	user_id: str
+	previous_tier: Optional[str] = None
+	new_tier: str
+	credits_added: int
+	new_balance: int
+	multiplier: float
+	purchase_rate: float
