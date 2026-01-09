@@ -7,7 +7,8 @@ from sqlalchemy.orm import selectinload
 
 from app.core.dependencies import access_internal, get_db
 from app.models import Subscription, User, Transaction, Credits, TransactionType, TransactionSource
-from app.schemas.subscription import SubscriptionUpdateResponse, SubscriptionUpdateRequest
+from app.schemas.credits import CreditsUserBalanceResponse, CreditsBase
+from app.schemas.subscription import SubscriptionUpdateResponse, SubscriptionUpdateRequest, SubscriptionPlanInternal
 
 # Internal API (для інших внутрішніх сервісів)
 internal_router = APIRouter(prefix="/api/internal", tags=["Internal API"])
@@ -17,7 +18,7 @@ internal_router = APIRouter(prefix="/api/internal", tags=["Internal API"])
     "/subscription/update",
     dependencies=[Depends(access_internal)],
     summary="Оновлення підписки користувача",
-    description="Доступний лише внутрішний доступ. Headers: X-Service-Token",
+    description="Лише внутрішний доступ. Headers: X-Service-Token",
     response_model=SubscriptionUpdateResponse,
     status_code=status.HTTP_200_OK,
     responses={
@@ -136,4 +137,94 @@ async def create_subscription_plan(
         new_balance=user_credit.balance,
         multiplier=user_subscription.plan.multiplier,
         purchase_rate=user_subscription.plan.purchase_rate
+    )
+
+
+@internal_router.get(
+    "/credits/balance/{user_id}",
+    dependencies=[Depends(access_internal)],
+    summary="Отримання балансу користувача",
+    description="Лише внутрішний доступ. Headers: X-Service-Token",
+    response_model=CreditsUserBalanceResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        403: {
+            "description": "Forbidden.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Invalid service token."}
+                },
+            },
+        },
+        404: {
+            "description": "Not found.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "User not found."}
+                },
+            },
+        },
+        500: {
+            "description": "Internal Server Error.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Internal Server Error."}
+                }
+            },
+        },
+    },
+)
+async def credits_balance_user(
+    user_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    user = await db.get(User, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User '{user_id}' not found.",
+        )
+
+    # завантажуємо підписку разом із планом
+    result = await db.execute(
+        select(Subscription)
+        .options(selectinload(Subscription.plan))
+        .where(Subscription.user_id == user_id)
+    )
+    subscription = result.scalar_one_or_none()
+    if not subscription:
+        return CreditsUserBalanceResponse(
+            user_id=user_id,
+            subscription=SubscriptionPlanInternal(
+                tier=None,
+                monthly_cost=0,
+                multiplier=1,
+                purchase_rate=1
+            ),
+            credits=CreditsBase(
+                balance=0,
+                total_earned=0,
+                total_spent=0
+            )
+        )
+    plan = subscription.plan
+
+    # кредити
+    result = await db.execute(select(Credits).where(Credits.user_id == user_id))
+    user_credits = result.scalar_one_or_none()
+
+
+    return CreditsUserBalanceResponse(
+        user_id=user_id,
+        subscription=SubscriptionPlanInternal(
+            tier=plan.tier,
+            monthly_cost=plan.monthly_cost,
+            multiplier=plan.multiplier,
+            purchase_rate=plan.purchase_rate
+        ),
+        credits=CreditsBase(
+            balance=user_credits.balance,
+            total_earned=user_credits.total_earned,
+            total_spent=user_credits.total_spent
+        )
     )

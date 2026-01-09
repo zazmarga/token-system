@@ -14,7 +14,6 @@ class SubscriptionPlanBase(BaseModel):
 	bonus_credits: int
 	multiplier: float
 	purchase_rate: float
-	# active: bool = True
 
 	class Config:
 		from_attributes = True
@@ -100,5 +99,12 @@ class SubscriptionUpdateResponse(BaseModel):
 	new_tier: str
 	credits_added: int
 	new_balance: int
+	multiplier: float
+	purchase_rate: float
+
+
+class SubscriptionPlanInternal(BaseModel):
+	tier: Optional[str] = None
+	monthly_cost: float
 	multiplier: float
 	purchase_rate: float
