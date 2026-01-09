@@ -7,8 +7,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.dependencies import access_internal, get_db
+from app.utils.idempotency import check_idempotency
 from app.models import Subscription, User, Transaction, Credits, TransactionType, TransactionSource, SubscriptionPlan
-from app.schemas.credits import CreditsUserBalanceResponse, CreditsBase, CreditsUserCheckResponse
+from app.schemas.credits import CreditsUserBalanceResponse, CreditsBase, CreditsUserCheckResponse, CreditsAddResponse, \
+    CreditsAddRequest
 from app.schemas.subscription import SubscriptionUpdateResponse, SubscriptionUpdateRequest, SubscriptionPlanInternal
 
 # Internal API (для інших внутрішніх сервісів)
@@ -63,31 +65,54 @@ async def create_subscription_plan(
 ):
     user_id = payload.user_id
 
-    # атомарна транзакція
-    async with db.begin():
-        # перевірка user
-        user = await db.get(User, user_id)
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"User '{user_id}' not found.",
-            )
-
-        # завантажуємо підписку разом із планом
-        result = await db.execute(
-            select(Subscription)
-            .options(selectinload(Subscription.plan))
-            .where(Subscription.user_id == user_id)
+    # перевірка user
+    user = await db.get(User, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User '{user_id}' not found.",
         )
-        user_subscription = result.scalar_one_or_none()
 
+    # Перевіряємо ідемпотентність
+    is_duplicate, existing_tx = await check_idempotency(
+        db=db,
+        operation_id=payload.operation_id,
+        expected_type=TransactionType.SUBSCRIPTION.value
+    )
+
+    if is_duplicate and existing_tx is not None:
+        metadata = existing_tx.info
+        # Повертаємо той самий результат, що був раніше
+        return SubscriptionUpdateResponse(
+            success=True,
+            user_id=existing_tx.user_id,
+            previous_tier=metadata.get("previous_tier"),
+            new_tier=metadata.get("new_tier"),
+            credits_added=existing_tx.credits,
+            new_balance=existing_tx.balance_after,
+            multiplier=metadata.get("multiplier"),
+            purchase_rate=metadata.get("purchase_rate"),
+        )
+
+    # завантажуємо підписку разом із планом
+    result = await db.execute(
+        select(Subscription)
+        .options(selectinload(Subscription.plan))
+        .where(Subscription.user_id == user_id)
+    )
+    user_subscription: Subscription | None = result.scalar_one_or_none()
+
+    # атомарна транзакція
+    async with db.begin_nested():
         if not user_subscription:
             previous_tier = None
             user_subscription = Subscription(user_id=user_id, plan_id=payload.subscription_tier)
             db.add(user_subscription)
+            plan = await db.get(SubscriptionPlan, payload.subscription_tier)
         else:
             previous_tier = user_subscription.plan.tier
             user_subscription.plan_id = payload.subscription_tier
+            plan = user_subscription.plan
 
         # кредити
         result = await db.execute(select(Credits).where(Credits.user_id == user_id))
@@ -100,44 +125,46 @@ async def create_subscription_plan(
         user_credit.balance += payload.credits_to_add
         user_credit.total_earned += payload.credits_to_add
         balance_after = user_credit.balance
-
-        # перевірка на дублікат operation_id
-        existing_tx = await db.execute(
-            select(Transaction).where(Transaction.operation_id == payload.operation_id)
-        )
-        if existing_tx.scalar_one_or_none():
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Transaction with operation_id '{payload.operation_id}' already exists."
-            )
+        new_tier = payload.subscription_tier
+        multiplier = plan.multiplier
+        purchase_rate = plan.purchase_rate
+        credits_to_add = payload.credits_to_add
+        operation_id = payload.operation_id
 
         # транзакція
         new_tx = Transaction(
+            id=f"txn_{operation_id}",
             user_id=user_id,
-            operation_id=payload.operation_id,
+            operation_id=operation_id,
             type=TransactionType.SUBSCRIPTION,
             source=TransactionSource.SUBSCRIPTION,
-            credits=payload.credits_to_add,
+            credits=credits_to_add,
             balance_before=balance_before,
             balance_after=balance_after,
-            description=f"Subscription update to {payload.subscription_tier}",
-            created_at=datetime.now(timezone.utc)
+            description=f"Subscription update to {new_tier}",
+            created_at=datetime.now(timezone.utc),
+            info={
+                "previous_tier": previous_tier,
+                "new_tier": new_tier,
+                "multiplier": float(multiplier),
+                "purchase_rate": float(purchase_rate),
+            }
         )
         db.add(new_tx)
-
-    await db.refresh(user_subscription)
-    await db.refresh(user_credit)
-    await db.refresh(new_tx)
+        await db.commit()
+    # await db.refresh(user_subscription)
+    # await db.refresh(user_credit)
+    # await db.refresh(new_tx)
 
     return SubscriptionUpdateResponse(
         success=True,
         user_id=user_id,
         previous_tier=previous_tier,
-        new_tier=payload.subscription_tier,
-        credits_added=payload.credits_to_add,
-        new_balance=user_credit.balance,
-        multiplier=user_subscription.plan.multiplier,
-        purchase_rate=user_subscription.plan.purchase_rate
+        new_tier=new_tier,
+        credits_added=credits_to_add,
+        new_balance=balance_after,
+        multiplier=multiplier,
+        purchase_rate=purchase_rate
     )
 
 
@@ -319,5 +346,3 @@ async def user_credits_checking(
         sufficient=sufficient,
         multiplier=multiplier,
     )
-
-

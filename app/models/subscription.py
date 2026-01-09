@@ -1,5 +1,5 @@
 from sqlalchemy import Column, Integer, String, DECIMAL, Boolean, DateTime, func, ForeignKey
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, validates
 
 from app.core.database import Base
 
@@ -20,6 +20,18 @@ class SubscriptionPlan(Base):
 	updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 	subscriptions = relationship("Subscription", back_populates="plan")
+
+	@validates("multiplier")
+	def validate_multiplier(self, key, value):
+		if value is None or value <= 0:
+			raise ValueError("Multiplier must be greater than 0")
+		return value
+
+	@validates("purchase_rate")
+	def validate_purchase_rate(self, key, value):
+		if value is None or value < 1.0:
+			raise ValueError("Purchase rate must be >= 1.0")
+		return value
 
 
 class Subscription(Base):

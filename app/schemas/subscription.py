@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, computed_field
+from pydantic import BaseModel, computed_field, Field
 
 
 #  Admin endpoints
@@ -12,8 +12,8 @@ class SubscriptionPlanBase(BaseModel):
 	fixed_cost: float
 	credits_included: int
 	bonus_credits: int
-	multiplier: float
-	purchase_rate: float
+	multiplier: float = Field(..., gt=0)
+	purchase_rate: float = Field(..., ge=1.0)
 
 	class Config:
 		from_attributes = True
@@ -43,8 +43,8 @@ class SubscriptionPlanUpdate(BaseModel):
 	fixed_cost: float | None = None
 	credits_included: int | None = None
 	bonus_credits: int | None = None
-	multiplier: float | None = None
-	purchase_rate: float | None = None
+	multiplier: float | None = Field(None, gt=0)
+	purchase_rate: float | None = Field(None, ge=1.0)
 	active: bool | None = None
 
 

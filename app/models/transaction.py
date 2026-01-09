@@ -1,6 +1,6 @@
 import enum
 
-from sqlalchemy import Column, Integer, String, ForeignKey, Float, DateTime, JSON, Enum, func
+from sqlalchemy import Column, Integer, String, ForeignKey, Float, DateTime, JSON, Enum, func, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
@@ -20,7 +20,7 @@ class TransactionSource(enum.Enum):
 class Transaction(Base):
     __tablename__ = "transactions"
 
-    id = Column(Integer, primary_key=True)
+    id = Column(String, primary_key=True)
     user_id = Column(String, ForeignKey("users.id"), nullable=False)
 
     type = Column(Enum(TransactionType), nullable=False)
