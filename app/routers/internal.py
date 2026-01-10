@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from logging import info
 from typing import Optional
 
 from fastapi import APIRouter, Depends, status, HTTPException
@@ -139,10 +140,11 @@ async def create_subscription_plan(
         purchase_rate = plan.purchase_rate
         credits_to_add = payload.credits_to_add
         operation_id = payload.operation_id
+        tx_id = f"txn_{operation_id[3:]}"
 
         # транзакція
         new_tx = Transaction(
-            id=f"txn_{operation_id}",
+            id=tx_id,
             user_id=user_id,
             operation_id=operation_id,
             type=TransactionType.SUBSCRIPTION,
@@ -267,7 +269,7 @@ async def user_credits_balance(
     "/credits/check/{user_id}",
     dependencies=[Depends(access_internal)],
     summary="Перевірка наявності кредитів",
-    description="Лише внутрішний доступ. Headers: X-Service-Token",
+    description="Лише внутрішній доступ. Headers: X-Service-Token",
     response_model=CreditsUserCheckResponse,
     status_code=status.HTTP_200_OK,
     responses={
@@ -358,7 +360,7 @@ async def user_credits_checking(
     "/credits/add",
     dependencies=[Depends(access_internal)],
     summary="Додавання кредитів: поповнення балансу",
-    description="Лише внутрішний доступ. Headers: X-Service-Token",
+    description="Лише внутрішній доступ. Headers: X-Service-Token",
     response_model=CreditsAddResponse,
     status_code=status.HTTP_200_OK,
     responses={
@@ -476,10 +478,16 @@ async def user_credits_add(
         balance_before = user_credits.balance
         user_credits.balance += credits_added
         balance_after = balance_before + credits_added
+        id_tx = f"txn_{operation_id[3:]}"
+
+        meta = payload.metadata
+        if hasattr(meta, "dict"):
+            meta = meta.dict()
+        info = {"purchase_rate": float(purchase_rate)} | meta
 
         # транзакція
         new_tx = Transaction(
-            id=f"txn_{operation_id}",
+            id=id_tx,
             user_id=user_id,
             operation_id=operation_id,
             type=TransactionType.ADD,
@@ -489,9 +497,7 @@ async def user_credits_add(
             balance_after=balance_after,
             description=payload.description,
             created_at=datetime.now(timezone.utc),
-            info={
-                "purchase_rate": float(purchase_rate)
-            }
+            info=info
         )
         db.add(new_tx)
         await db.commit()

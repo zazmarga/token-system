@@ -9,7 +9,9 @@ class AppConfig(BaseSettings):
     POSTGRES_PORT: str
     ADMIN_TOKEN: str
     SERVICE_TOKEN: str
+    USER_TOKEN_BEARER: str
     DEBUG_MODE: bool = False
+    INTERNAL_HOST: str
 
     @property
     def DATABASE_URL(self) -> str:

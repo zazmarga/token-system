@@ -4,7 +4,7 @@ from typing import List, Optional
 from pydantic import BaseModel, computed_field, Field
 
 
-#  Admin endpoints
+# **************    Admin endpoints
 class SubscriptionPlanBase(BaseModel):
 	tier: str
 	name: str
@@ -72,7 +72,7 @@ class PurchaseRateUpdateResponse(BaseModel):
 	updated_at: datetime
 
 
-# Public endpoints
+# **************    Public endpoints
 class SubscriptionPlanPublicDetail(SubscriptionPlanBase):
 	@computed_field
 	@property
@@ -84,7 +84,7 @@ class SubscriptionPlanPublicList(BaseModel):
 	plans: List[SubscriptionPlanPublicDetail]
 
 
-# Internal endpoints
+# **************    Internal endpoints
 class SubscriptionUpdateRequest(BaseModel):
 	user_id: str
 	subscription_tier: str

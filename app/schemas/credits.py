@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from app.schemas.subscription import SubscriptionPlanInternal
 
 
-# Internal
+# **************    Internal
 class CreditsBase(BaseModel):
 	balance: int
 	total_earned: int
@@ -49,3 +49,17 @@ class CreditsAddResponse(BaseModel):
 	balance_before: int
 	balance_after: int
 	operation_id: str
+
+
+# **************    Public
+class CreditsPurchasePayload(BaseModel):
+	amount_usd: float
+	payment_method_id: str
+
+
+class CreditsPurchaseResponse(BaseModel):
+	success: bool
+	transaction_id: str
+	amount_usd: float
+	credits_added: int
+	new_balance: int
