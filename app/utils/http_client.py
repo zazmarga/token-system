@@ -13,7 +13,7 @@ async def call_internal_api(endpoint: str, payload: dict) -> dict:
     async with httpx.AsyncClient() as client:
         response = await client.post(
             url,
-            headers={"X-Service-Token": "super-secret-service-token"},
+            headers={"X-Service-Token": config.SERVICE_TOKEN},
             json=payload,
         )
 
