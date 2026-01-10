@@ -1,12 +1,17 @@
 from fastapi import APIRouter, status, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.dependencies import get_db, get_current_user
-from app.models import TransactionSource
-from app.models.subscription import SubscriptionPlan
+from app.models import TransactionSource, Credits
+from app.models.subscription import SubscriptionPlan, Subscription
+from app.schemas.base import UserCreditsBase
 from app.schemas.credits import CreditsPurchaseResponse, CreditsPurchasePayload
-from app.schemas.subscription import SubscriptionPlanPublicList
+from app.schemas.subscription import (
+    SubscriptionPlanPublicList, UserSubscriptionResponse,
+    SubscriptionPlanPublicDetail
+)
 from app.utils.common import generate_operation_id, is_payment_complete
 from app.utils.http_client import call_internal_api
 
@@ -44,7 +49,6 @@ async def list_available_subscription_plans(
 
 @public_router.post(
     "/credits/purchase",
-    # dependencies=[Depends(get_current_user)],
     summary="Поповнення кредитів",
     description="Доступ для user з token. Headers: Authorization: Bearer {user_token}",
     response_model=CreditsPurchaseResponse,
@@ -109,4 +113,83 @@ async def credits_purchase_by_user(
         amount_usd=payload.amount_usd,
         credits_added=internal_result["credits_added"],
         new_balance=internal_result["balance_after"]
+    )
+
+
+@public_router.get(
+    "/subscription",
+    summary="Отримання інформації про підписку користувача",
+    description="Доступ для user з token. Headers: Authorization: Bearer {user_token}",
+    response_model=UserSubscriptionResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        403: {
+            "description": "Forbidden.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Invalid user token."}
+                },
+            },
+        },
+        404: {
+            "description": "Not found.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Subscription not found."}
+                },
+            },
+        },
+        500: {
+            "description": "Internal Server Error.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Internal Server Error."}
+                }
+            },
+        },
+    },
+)
+async def user_subscription(
+        user_id: str = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db)
+):
+    # підписка та план підписки
+    result = await db.execute(
+        select(Subscription)
+        .options(selectinload(Subscription.plan))
+        .where(Subscription.user_id == user_id)
+    )
+    subscription: Subscription | None = result.scalar_one_or_none()
+
+    if not subscription:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Subscription of user '{user_id}' not found."
+        )
+
+    plan = subscription.plan
+
+    # кредити
+    result = await db.execute(
+        select(Credits)
+        .where(Credits.user_id == user_id)
+    )
+    user_credits: Credits | None = result.scalar_one_or_none()
+
+    return UserSubscriptionResponse(
+        subscription=SubscriptionPlanPublicDetail(
+            tier=plan.tier,
+            name=plan.name,
+            monthly_cost=plan.monthly_cost,
+            fixed_cost=plan.fixed_cost,
+            credits_included=plan.credits_included,
+            bonus_credits=plan.bonus_credits,
+            multiplier=plan.multiplier,
+            purchase_rate=plan.purchase_rate
+        ),
+        credits=UserCreditsBase(
+            balance=user_credits.balance,
+            total_earned=user_credits.total_earned,
+            total_spent=user_credits.total_spent
+        )
     )
