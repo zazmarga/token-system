@@ -1,17 +1,21 @@
-from fastapi import APIRouter, status, Depends, HTTPException
-from sqlalchemy import select
+from typing import Optional, List
+
+from fastapi import APIRouter, status, Depends, HTTPException, Query
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.dependencies import get_db, get_current_user
-from app.models import TransactionSource, Credits
+from app.models import TransactionSource, Credits, TransactionType, Transaction
 from app.models.subscription import SubscriptionPlan, Subscription
 from app.schemas.base import UserCreditsBase
 from app.schemas.credits import CreditsPurchaseResponse, CreditsPurchasePayload
+from app.schemas.serializers import serialize_transaction
 from app.schemas.subscription import (
     SubscriptionPlanPublicList, UserSubscriptionResponse,
     SubscriptionPlanPublicDetail
 )
+from app.schemas.transactions import TransactionPublicPaginatedList
 from app.utils.common import generate_operation_id, is_payment_complete
 from app.utils.http_client import call_internal_api
 
@@ -54,6 +58,14 @@ async def list_available_subscription_plans(
     response_model=CreditsPurchaseResponse,
     status_code=status.HTTP_200_OK,
     responses={
+        401: {
+            "description": "Unauthorized.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Not authenticated."}
+                },
+            },
+        },
         403: {
             "description": "Forbidden.",
             "content": {
@@ -123,6 +135,14 @@ async def credits_purchase_by_user(
     response_model=UserSubscriptionResponse,
     status_code=status.HTTP_200_OK,
     responses={
+        401: {
+            "description": "Unauthorized.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Not authenticated."}
+                },
+            },
+        },
         403: {
             "description": "Forbidden.",
             "content": {
@@ -192,4 +212,72 @@ async def user_subscription(
             total_earned=user_credits.total_earned,
             total_spent=user_credits.total_spent
         )
+    )
+
+
+@public_router.get(
+    "/transactions",
+    summary="Історія транзакцій",
+    response_model=TransactionPublicPaginatedList,
+    status_code=status.HTTP_200_OK,
+    responses={
+        401: {
+            "description": "Unauthorized.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Not authenticated."}
+                },
+            },
+        },
+        403: {
+            "description": "Forbidden.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Invalid user token."}
+                },
+            },
+        },
+        500: {
+            "description": "Internal Server Error.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Internal Server Error."}
+                }
+            },
+        },
+    },
+)
+async def list_user_transactions(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    type: Optional[TransactionType] = Query(None),
+    user_id: str = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    # базовий запит
+    stmt = select(Transaction).where(Transaction.user_id == user_id)
+
+    # фільтр по типу
+    if type:
+        stmt = stmt.where(Transaction.type == type.value.upper())
+
+    # підрахунок total
+    count_stmt = select(func.count()).select_from(Transaction).where(Transaction.user_id == user_id)
+    if type:
+        count_stmt = count_stmt.where(Transaction.type == type.value.upper())
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar_one()
+
+    # пагінація
+    stmt = stmt.order_by(Transaction.created_at.desc()).limit(limit).offset(offset)
+    result = await db.execute(stmt)
+    db_transactions: List[Transaction] = result.scalars().all()
+
+    transactions = [serialize_transaction(t) for t in db_transactions]
+
+    return TransactionPublicPaginatedList(
+        total=total,
+        limit=limit,
+        offset=offset,
+        transactions=transactions
     )
