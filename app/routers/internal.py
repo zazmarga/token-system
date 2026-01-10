@@ -492,6 +492,7 @@ async def user_credits_add(
             operation_id=operation_id,
             type=TransactionType.ADD,
             source=TransactionSource.PURCHASE,
+            amount_usd=amount_usd,
             credits=credits_added,
             balance_before=balance_before,
             balance_after=balance_after,
