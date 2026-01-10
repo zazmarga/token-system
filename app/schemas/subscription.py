@@ -3,6 +3,8 @@ from typing import List, Optional
 
 from pydantic import BaseModel, computed_field, Field
 
+from app.schemas.base import UserCreditsBase
+
 
 # **************    Admin endpoints
 class SubscriptionPlanBase(BaseModel):
@@ -82,6 +84,11 @@ class SubscriptionPlanPublicDetail(SubscriptionPlanBase):
 
 class SubscriptionPlanPublicList(BaseModel):
 	plans: List[SubscriptionPlanPublicDetail]
+
+
+class UserSubscriptionResponse(BaseModel):
+	subscription: SubscriptionPlanPublicDetail
+	credits: UserCreditsBase
 
 
 # **************    Internal endpoints
