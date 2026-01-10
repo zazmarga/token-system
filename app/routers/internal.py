@@ -1,5 +1,4 @@
 from datetime import datetime, timezone
-from logging import info
 from typing import Optional
 
 from fastapi import APIRouter, Depends, status, HTTPException
@@ -8,18 +7,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.dependencies import access_internal, get_db
+from app.utils.common import generate_transaction_id, user_existing_check
 from app.utils.idempotency import check_idempotency
 from app.models import (
-    Subscription, User, Transaction, Credits, TransactionType,
+    Subscription, Transaction, Credits, TransactionType,
     TransactionSource, SubscriptionPlan, Settings
 )
 from app.schemas.credits import (
     CreditsUserBalanceResponse, CreditsBase, CreditsUserCheckResponse,
-    CreditsAddResponse, CreditsAddRequest
+    CreditsAddResponse, CreditsAddRequest, CreditsCalculateResponse, CreditsCalculateRequest
 )
 from app.schemas.subscription import (
     SubscriptionUpdateResponse, SubscriptionUpdateRequest,
     SubscriptionPlanInternal)
+
 
 # Internal API (для інших внутрішніх сервісів)
 internal_router = APIRouter(prefix="/api/internal", tags=["Internal API"])
@@ -29,7 +30,7 @@ internal_router = APIRouter(prefix="/api/internal", tags=["Internal API"])
     "/subscription/update",
     dependencies=[Depends(access_internal)],
     summary="Оновлення підписки користувача",
-    description="Лише внутрішний доступ. Headers: X-Service-Token",
+    description="Лише внутрішній доступ. Headers: X-Service-Token",
     response_model=SubscriptionUpdateResponse,
     status_code=status.HTTP_200_OK,
     responses={
@@ -75,13 +76,8 @@ async def create_subscription_plan(
 ):
     user_id = payload.user_id
 
-    # перевірка user
-    user = await db.get(User, user_id)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"User '{user_id}' not found.",
-        )
+    # перевірка user існує? як що ні: Exception
+    await user_existing_check(db, user_id)
 
     # Перевіряємо ідемпотентність
     is_duplicate, existing_tx = await check_idempotency(
@@ -140,7 +136,7 @@ async def create_subscription_plan(
         purchase_rate = plan.purchase_rate
         credits_to_add = payload.credits_to_add
         operation_id = payload.operation_id
-        tx_id = f"txn_{operation_id[3:]}"
+        tx_id = generate_transaction_id(operation_id)
 
         # транзакція
         new_tx = Transaction(
@@ -180,7 +176,7 @@ async def create_subscription_plan(
     "/credits/balance/{user_id}",
     dependencies=[Depends(access_internal)],
     summary="Отримання балансу користувача",
-    description="Лише внутрішний доступ. Headers: X-Service-Token",
+    description="Лише внутрішній доступ. Headers: X-Service-Token",
     response_model=CreditsUserBalanceResponse,
     status_code=status.HTTP_200_OK,
     responses={
@@ -214,12 +210,8 @@ async def user_credits_balance(
     user_id: str,
     db: AsyncSession = Depends(get_db)
 ):
-    user = await db.get(User, user_id)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"User '{user_id}' not found.",
-        )
+    # перевірка user існує? як що ні: Exception
+    await user_existing_check(db, user_id)
 
     # завантажуємо підписку разом із планом
     result = await db.execute(
@@ -304,12 +296,8 @@ async def user_credits_checking(
     required_credits: Optional[int] = None,
     db: AsyncSession = Depends(get_db)
 ):
-    user = await db.get(User, user_id)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"User '{user_id}' not found.",
-        )
+    # перевірка user існує? як що ні: Exception
+    await user_existing_check(db, user_id)
 
     # завантажуємо підписку разом із планом
     result = await db.execute(
@@ -405,12 +393,9 @@ async def user_credits_add(
         db: AsyncSession = Depends(get_db)
 ):
     user_id = payload.user_id
-    user = await db.get(User, user_id)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"User '{user_id}' not found.",
-        )
+
+    # перевірка user існує? як що ні: Exception
+    await user_existing_check(db, user_id)
 
     # Перевіряємо ідемпотентність
     operation_id = payload.operation_id
@@ -442,6 +427,7 @@ async def user_credits_add(
         .where(Subscription.user_id == user_id)
     )
     subscription: Subscription | None = result.scalar_one_or_none()
+
     if not subscription:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -478,7 +464,7 @@ async def user_credits_add(
         balance_before = user_credits.balance
         user_credits.balance += credits_added
         balance_after = balance_before + credits_added
-        id_tx = f"txn_{operation_id[3:]}"
+        id_tx = generate_transaction_id(operation_id)
 
         meta = payload.metadata
         if hasattr(meta, "dict"):
@@ -514,3 +500,102 @@ async def user_credits_add(
         balance_after=balance_after,
         operation_id=operation_id
     )
+
+
+@internal_router.post(
+    "/credits/calculate",
+    dependencies=[Depends(access_internal)],
+    summary="Розрахунок вартості операції, без списання",
+    description="Лише внутрішній доступ. Headers: X-Service-Token",
+    response_model=CreditsCalculateResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        403: {
+            "description": "Forbidden.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Invalid service token."}
+                },
+            },
+        },
+        404: {
+            "description": "Not found.",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "user_not_found": {
+                            "summary": "User not found",
+                            "value": {"detail": "User not found."},
+                        },
+                        "no_subscription": {
+                            "summary": "No subscription",
+                            "value": {"detail": "User has no subscription."},
+                        },
+                    }
+                },
+            },
+        },
+        500: {
+            "description": "Internal Server Error.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Internal Server Error."}
+                }
+            },
+        },
+    },
+)
+async def user_credits_calculate(
+    payload: CreditsCalculateRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    user_id = payload.user_id
+
+    # перевірка user існує? як що ні: Exception
+    await user_existing_check(db, user_id)
+
+    # отримуємо підписку і множник з плану
+    result = await db.execute(
+        select(Subscription, SubscriptionPlan.multiplier)
+        .join(Subscription.plan)   # зв'язати з планом
+        .where(Subscription.user_id == user_id)
+    )
+    row = result.one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User '{user_id}' has no subscription.",
+        )
+
+    _, multiplier = row
+
+    # кредити
+    result = await db.execute(select(Credits.balance).where(Credits.user_id == user_id))
+    user_balance = result.scalar_one()
+
+    # отримати базову ставку
+    result = await db.execute(select(Settings.base_rate))
+    base_rate: int | None = result.scalar()
+    if not base_rate:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"База даних не містить у Settings: base_rate.",
+        )
+
+    # розрахувати кредити до списання
+    cost_usd = payload.cost_usd
+    multiplier = float(multiplier)
+    credits_to_charge = round(cost_usd * multiplier * base_rate)
+    balance_before_charge = user_balance   # може бути нульовим (!)
+    balance_after_charge = balance_before_charge - credits_to_charge
+
+    return CreditsCalculateResponse(
+        user_id=user_id,
+        cost_usd=cost_usd,
+        credits_to_charge=credits_to_charge,
+        multiplier=multiplier,
+        current_balance=balance_before_charge,
+        balance_after=balance_after_charge,
+        sufficient=(balance_after_charge >= 0)
+    )
+

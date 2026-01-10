@@ -50,6 +50,19 @@ class CreditsAddResponse(BaseModel):
 	operation_id: str
 
 
+class CreditsCalculateRequest(BaseModel):
+	user_id: str
+	cost_usd: float
+
+
+class CreditsCalculateResponse(CreditsCalculateRequest):
+	credits_to_charge: int
+	multiplier: float
+	current_balance: Optional[int] = 0
+	balance_after: Optional[int] = 0
+	sufficient: bool
+
+
 # **************    Public
 class CreditsPurchasePayload(BaseModel):
 	amount_usd: float
