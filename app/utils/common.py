@@ -2,7 +2,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Settings, User
+from app.models import Settings, User, Credits
 
 
 def generate_transaction_id(operation_id: str) -> str:
@@ -53,3 +53,24 @@ async def user_existing_check(db: AsyncSession, user_id: str):
 			status_code=status.HTTP_404_NOT_FOUND,
 			detail=f"User '{user_id}' not found.",
 		)
+
+
+async def get_base_rate_from_settings(db: AsyncSession):
+	result = await db.execute(select(Settings.base_rate))
+	base_rate: int | None = result.scalar()
+	if not base_rate:
+		raise HTTPException(
+			status_code=status.HTTP_404_NOT_FOUND,
+			detail=f"База даних не містить у Settings: base_rate.",
+		)
+	return base_rate
+
+
+async def get_user_balance(db: AsyncSession, user_id: str) -> int:
+	result = await db.execute(select(Credits.balance).where(Credits.user_id == user_id))
+	user_balance = result.scalar_one()
+	return user_balance
+
+
+def calculate_credits_amount(cost_usd: float, multiplier: float, base_rate: int) -> int:
+	return round(cost_usd * multiplier * base_rate)

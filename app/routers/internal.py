@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Union
 
 from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy import select
@@ -7,7 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.dependencies import access_internal, get_db
-from app.utils.common import generate_transaction_id, user_existing_check
+from app.utils.common import generate_transaction_id, user_existing_check, get_user_balance, calculate_credits_amount, \
+    get_base_rate_from_settings
 from app.utils.idempotency import check_idempotency
 from app.models import (
     Subscription, Transaction, Credits, TransactionType,
@@ -15,7 +16,8 @@ from app.models import (
 )
 from app.schemas.credits import (
     CreditsUserBalanceResponse, CreditsBase, CreditsUserCheckResponse,
-    CreditsAddResponse, CreditsAddRequest, CreditsCalculateResponse, CreditsCalculateRequest
+    CreditsAddResponse, CreditsAddRequest, CreditsCalculateResponse, CreditsCalculateRequest, CreditsChargeRequest,
+    CreditsChargeSuccessResponse, CreditsChargeNoSuccessResponse
 )
 from app.schemas.subscription import (
     SubscriptionUpdateResponse, SubscriptionUpdateRequest,
@@ -569,23 +571,16 @@ async def user_credits_calculate(
 
     _, multiplier = row
 
-    # кредити
-    result = await db.execute(select(Credits.balance).where(Credits.user_id == user_id))
-    user_balance = result.scalar_one()
-
     # отримати базову ставку
-    result = await db.execute(select(Settings.base_rate))
-    base_rate: int | None = result.scalar()
-    if not base_rate:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"База даних не містить у Settings: base_rate.",
-        )
+    base_rate = await get_base_rate_from_settings(db)
+
+    # отримати баланс
+    user_balance = await get_user_balance(db, user_id)
 
     # розрахувати кредити до списання
     cost_usd = payload.cost_usd
     multiplier = float(multiplier)
-    credits_to_charge = round(cost_usd * multiplier * base_rate)
+    credits_to_charge = calculate_credits_amount(cost_usd, multiplier, base_rate)
     balance_before_charge = user_balance   # може бути нульовим (!)
     balance_after_charge = balance_before_charge - credits_to_charge
 
@@ -599,3 +594,132 @@ async def user_credits_calculate(
         sufficient=(balance_after_charge >= 0)
     )
 
+
+@internal_router.post(
+    "/credits/charge",
+    dependencies=[Depends(access_internal)],
+    summary=" Списання кредитів: atomic операція",
+    description="Лише внутрішній доступ. Headers: X-Service-Token",
+    response_model=Union[
+        CreditsChargeSuccessResponse, CreditsChargeNoSuccessResponse
+    ],
+    status_code=status.HTTP_200_OK,
+    responses={
+        403: {
+            "description": "Forbidden.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Invalid service token."}
+                },
+            },
+        },
+        404: {
+            "description": "Not found.",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "user_not_found": {
+                            "summary": "User not found",
+                            "value": {"detail": "User not found."},
+                        },
+                        "no_subscription": {
+                            "summary": "No subscription",
+                            "value": {"detail": "User has no subscription."},
+                        },
+                    }
+                },
+            },
+        },
+        500: {
+            "description": "Internal Server Error.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Internal Server Error."}
+                }
+            },
+        },
+    },
+)
+async def user_credits_charge(
+    payload: CreditsChargeRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    user_id = payload.user_id
+
+    # перевірка user існує? як що ні: Exception
+    await user_existing_check(db, user_id)
+
+    # отримуємо підписку і множник з плану
+    result = await db.execute(
+        select(Subscription, SubscriptionPlan.multiplier)
+        .join(Subscription.plan)   # зв'язати з планом
+        .where(Subscription.user_id == user_id)
+    )
+    row = result.one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User '{user_id}' has no subscription.",
+        )
+
+    _, multiplier = row
+
+    # отримати базову ставку
+    base_rate = await get_base_rate_from_settings(db)
+
+    # отримати баланс
+    user_balance = await get_user_balance(db, user_id)
+
+    # розрахувати кредити до списання
+    cost_usd = payload.cost_usd
+    multiplier = float(multiplier)
+    credits_to_charge = calculate_credits_amount(cost_usd, multiplier, base_rate)
+    balance_before_charge = user_balance   # може бути нульовим (!)
+    balance_after_charge = balance_before_charge - credits_to_charge
+
+    if balance_after_charge < 0:
+        return CreditsChargeNoSuccessResponse(
+            error="insufficient_credits",
+            user_id=user_id,
+            required_credits=credits_to_charge,
+            current_balance=user_balance,
+            deficit=(credits_to_charge - user_balance)
+        )
+
+    # atomic operation (!) here: txn, credits
+    async with db.begin_nested():
+        # списати кредити з балансу user
+        result = await db.execute(select(Credits).where(Credits.user_id == user_id))
+        user_credits: Credits | None =  result.scalar_one_or_none()
+        if user_credits:
+            user_credits.total_spent += credits_to_charge
+            user_credits.balance -= credits_to_charge
+
+        # створити транзакцію
+        operation_id = payload.operation_id
+        id_tx = generate_transaction_id(operation_id)
+        new_tx = Transaction(
+            id=id_tx,
+            user_id=user_id,
+            operation_id=operation_id,
+            type=TransactionType.CHARGE,
+            cost_usd=cost_usd,
+            credits=-credits_to_charge,
+            balance_before=balance_before_charge,
+            balance_after=balance_after_charge,
+            description=payload.description,
+            created_at=datetime.now(timezone.utc),
+            info=payload.metadata
+        )
+        db.add(new_tx)
+        await db.commit()
+
+    return CreditsChargeSuccessResponse(
+        transaction_id=id_tx,
+        user_id=user_id,
+        cost_usd=cost_usd,
+        credits_charged=credits_to_charge,
+        balance_before=balance_before_charge,
+        balance_after=balance_after_charge,
+        operation_id=operation_id
+    )

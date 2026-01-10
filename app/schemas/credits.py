@@ -63,6 +63,32 @@ class CreditsCalculateResponse(CreditsCalculateRequest):
 	sufficient: bool
 
 
+class CreditsChargeRequest(CreditsCalculateRequest):
+	operation_id: str
+	description: str
+	metadata: dict
+
+
+class CreditsChargeNoSuccessResponse(BaseModel):
+	success: bool = False
+	error: str
+	user_id: str
+	required_credits: int
+	current_balance: int
+	deficit: int
+
+
+class CreditsChargeSuccessResponse(BaseModel):
+	success: bool = True
+	transaction_id: str
+	user_id: str
+	cost_usd: float
+	credits_charged: int
+	balance_before: int
+	balance_after: int
+	operation_id: str
+
+
 # **************    Public
 class CreditsPurchasePayload(BaseModel):
 	amount_usd: float
