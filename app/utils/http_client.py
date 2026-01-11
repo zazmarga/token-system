@@ -9,7 +9,7 @@ async def call_internal_api(endpoint: str, payload: dict) -> dict:
     Викликає Internal API з переданим payload.
     Повертає JSON-відповідь або кидає HTTPException.
     """
-    url = f"{config.INTERNAL_HOST}{endpoint}"
+    url = f"{config.INTERNAL_HOST}:{config.INTERNAL_PORT}{endpoint}"
     async with httpx.AsyncClient() as client:
         response = await client.post(
             url,
