@@ -664,6 +664,26 @@ async def user_credits_charge(
 
     _, multiplier = row
 
+    # Перевіряємо ідемпотентність
+    operation_id = payload.operation_id
+    is_duplicate, existing_tx = await check_idempotency(
+        db=db,
+        operation_id=operation_id,
+        expected_type=TransactionType.CHARGE.value
+    )
+
+    if is_duplicate and existing_tx is not None:
+        # Повертаємо той самий результат, що був раніше
+        return CreditsChargeSuccessResponse(
+            transaction_id=existing_tx.id,
+            user_id=existing_tx.user_id,
+            cost_usd=existing_tx.cost_usd,
+            credits_charged=existing_tx.credits,
+            balance_before=existing_tx.balance_before,
+            balance_after=existing_tx.balance_after,
+            operation_id=operation_id
+        )
+
     # отримати базову ставку
     base_rate = await get_base_rate_from_settings(db)
 
@@ -696,7 +716,6 @@ async def user_credits_charge(
             user_credits.balance -= credits_to_charge
 
         # створити транзакцію
-        operation_id = payload.operation_id
         id_tx = generate_transaction_id(operation_id)
         new_tx = Transaction(
             id=id_tx,
