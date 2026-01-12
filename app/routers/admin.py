@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import access_admin, get_session
 from app.models import Credits, Transaction, TransactionType
 from app.models.user import User
-from app.models.settings import Settings
+from app.models.settings import Settings, AdminLog, AdminOperationType
 from app.models.subscription import SubscriptionPlan, Subscription
 from app.schemas.admin import ExchangeRateResponse, ExchangeRateUpdate
 from app.schemas.base import (
@@ -26,6 +26,10 @@ from app.schemas.subscription import (
 )
 
 import logging
+
+from app.utils.common import dump_payload
+from app.utils.logging import generate_admin_log_id, get_extra_data_log
+
 logger = logging.getLogger("[ADMIN]")
 
 
@@ -67,15 +71,15 @@ async def update_exchange_rate(
     settings = settings.scalars().first()
     if not settings:
         # створюємо новий запис
-        new_settings = Settings(base_rate=payload.base_rate)
-        session.add(new_settings)
+        settings = Settings(base_rate=payload.base_rate)
+        session.add(settings)
         await session.commit()
-        await session.refresh(new_settings)
+        await session.refresh(settings)
         return {
             "success": True,
-            "old_base_rate": payload.base_rate,
+            "old_base_rate": 0,
             "new_base_rate": payload.base_rate,
-            "updated_at": new_settings.updated_at.isoformat()
+            "updated_at": settings.updated_at.isoformat()
         }
 
     old_rate = settings.base_rate
@@ -83,12 +87,31 @@ async def update_exchange_rate(
     await session.commit()
     await session.refresh(settings)
 
-    return {
+    result = {
         "success": True,
         "old_base_rate": old_rate,
         "new_base_rate": settings.base_rate,
         "updated_at": settings.updated_at.isoformat()
     }
+    # create new AdminLog
+    operation_type = AdminOperationType.UPDATE_BASE_RATE.value
+    new_admin_log = AdminLog(
+        id=generate_admin_log_id(operation_type),
+        operation_type=operation_type.upper(),
+        entity="Settings",
+        entity_id=str(settings.id),
+        changes=result
+    )
+
+    session.add(new_admin_log)
+    await session.commit()
+    await session.refresh(new_admin_log)
+
+    logger.info(
+        "Changed base rate. AdminLog:", extra=get_extra_data_log(new_admin_log)
+    )
+
+    return result
 
 
 @admin_router.post(
@@ -136,20 +159,43 @@ async def create_subscription_plan(
             detail=f"Unique: tier='{payload.tier}' already exists."
         )
 
-    result = await session.execute(select(SubscriptionPlan).where(SubscriptionPlan.name == payload.name))
+    result = await (session
+                    .execute(select(SubscriptionPlan)
+                    .where(SubscriptionPlan.name == payload.name)))
     plan_by_name = result.scalar_one_or_none()
     if plan_by_name:
+        #  ????????????????????
+        # logger.warning(
+        #     f"Subscription plan tier='{payload.name}' already exists.")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Unique: name='{payload.name}' already exists."
+            detail=f"Unique: tier='{payload.name}' already exists."
         )
 
-    new_plan = SubscriptionPlan(
-        **payload.model_dump(exclude_unset=True, exclude_none=True)
-    )
+    new_plan = SubscriptionPlan(**dump_payload(payload))
+
     session.add(new_plan)
-    await session.commit()
+    await session.flush()
+    # await session.commit()  # ili flush()
     await session.refresh(new_plan)
+
+    # create new AdminLog
+    operation_type = AdminOperationType.CREATE_PLAN.value
+    new_admin_log = AdminLog(
+        id=generate_admin_log_id(operation_type),
+        operation_type=operation_type.upper(),
+        entity="SubscriptionPlan",
+        entity_id=new_plan.tier,
+        changes={"success": True, **dump_payload(payload)}
+    )
+
+    session.add(new_admin_log)
+    await session.commit()
+    await session.refresh(new_admin_log)
+    logger.info(
+        "Created new subscription plan. AdminLog:", extra=get_extra_data_log(new_admin_log)
+    )
+
     return SubscriptionPlanResponse(success=True, plan=new_plan)
 
 
@@ -200,6 +246,24 @@ async def update_subscription_plan(
         setattr(plan, k, v)
         await session.commit()
         await session.refresh(plan)
+
+    # create new AdminLog
+    operation_type = AdminOperationType.UPDATE_PLAN.value
+    new_admin_log = AdminLog(
+        id=generate_admin_log_id(operation_type),
+        operation_type=operation_type.upper(),
+        entity="SubscriptionPlan",
+        entity_id=plan.tier,
+        changes={"success": True, **dump_payload(payload)}
+    )
+
+    session.add(new_admin_log)
+    await session.commit()
+    await session.refresh(new_admin_log)
+    logger.info(
+        "Updated subscription plan. AdminLog:", extra=get_extra_data_log(new_admin_log)
+    )
+
     return SubscriptionPlanResponse(success=True, plan=plan)
 
 
@@ -246,6 +310,24 @@ async def delete_subscription_plan(
         raise HTTPException(status_code=404, detail=f"Plan '{tier}' not found")
     await session.delete(plan)
     await session.commit()
+
+    # create new AdminLog
+    operation_type = AdminOperationType.DELETE_PLAN.value
+    new_admin_log = AdminLog(
+        id=generate_admin_log_id(operation_type),
+        operation_type=operation_type.upper(),
+        entity="SubscriptionPlan",
+        entity_id=plan.tier,
+        changes={"success": True}
+    )
+
+    session.add(new_admin_log)
+    await session.commit()
+    await session.refresh(new_admin_log)
+    logger.info(
+        "Deleted subscription plan. AdminLog:", extra=get_extra_data_log(new_admin_log)
+    )
+
     return {
         "success": True,
         "message": "Subscription plan deleted",
@@ -355,8 +437,29 @@ async def update_multiplier(
 
     old_multiplier = plan.multiplier
     plan.multiplier = multiplier
+
+    # create new AdminLog
+    operation_type = AdminOperationType.UPDATE_MULTIPLIER.value
+    new_admin_log = AdminLog(
+        id=generate_admin_log_id(operation_type),
+        operation_type=operation_type.upper(),
+        entity="SubscriptionPlan.multiplier",
+        entity_id=plan.tier,
+        changes={
+            "success": True,
+            "tier": tier,
+            "multiplier": float(old_multiplier),
+            "new_multiplier": multiplier
+        }
+    )
+
+    session.add(new_admin_log)
     await session.commit()
     await session.refresh(plan)
+    await session.refresh(new_admin_log)
+    logger.info(
+        "Updated multiplier. AdminLog:", extra=get_extra_data_log(new_admin_log)
+    )
 
     return MultiplierUpdateResponse(
         success=True,
@@ -412,8 +515,31 @@ async def update_purchase_rate(
 
     old_purchase_rate = plan.purchase_rate
     plan.purchase_rate = purchase_rate
+
+    # create new AdminLog
+    operation_type = AdminOperationType.UPDATE_PURCHASE_RATE.value
+    new_admin_log = AdminLog(
+        id=generate_admin_log_id(operation_type),
+        operation_type=operation_type.upper(),
+        entity="SubscriptionPlan.purchase_rate",
+        entity_id=plan.tier,
+        changes={
+            "success": True,
+            "tier": tier,
+            "old_purchase_rate": float(old_purchase_rate),
+            "new_purchase_rate": purchase_rate
+        }
+    )
+
     await session.commit()
+    session.add(new_admin_log)
     await session.refresh(plan)
+    await session.refresh(new_admin_log)
+
+    logger.info(
+        "Updated purchase rate. AdminLog:", extra=get_extra_data_log(new_admin_log)
+    )
+
 
     return PurchaseRateUpdateResponse(
         success=True,
@@ -451,8 +577,8 @@ async def update_purchase_rate(
     },
 )
 async def get_usage_statistics(
-    start_date: date = Query(..., description="Start date (ISO 8601, e.g. 2026-01-01)"),
-    end_date: date = Query(..., description="End date (ISO 8601, e.g. 2026-01-31)"),
+    start_date: date = Query(..., description="Start date (e.g. 2026-01-01)"),
+    end_date: date = Query(..., description="End date (e.g. 2026-01-31)"),
     tier: Optional[str] = Query(None, description="Tier: optional"),
     session: AsyncSession = Depends(get_session)
 ):

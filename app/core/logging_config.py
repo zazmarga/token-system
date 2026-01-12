@@ -19,7 +19,7 @@ class ModelFormatter(logging.Formatter):
         base = super().format(record)
         extras = {k: v for k, v in record.__dict__.items() if k in self.fields}
         if extras:
-            base += " " + json.dumps(extras, default=str)
+            base += " " + json.dumps(extras, default=str, ensure_ascii=False)
         return base
 
 

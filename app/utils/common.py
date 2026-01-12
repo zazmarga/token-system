@@ -68,3 +68,7 @@ async def get_base_rate_from_settings(session: AsyncSession):
 
 def calculate_credits_amount(cost_usd: float, multiplier: float, base_rate: int) -> int:
 	return round(cost_usd * multiplier * base_rate)
+
+
+def dump_payload(payload):
+	return payload.model_dump(exclude_unset=True, exclude_none=True)
