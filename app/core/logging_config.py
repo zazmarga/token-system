@@ -1,3 +1,4 @@
+import os
 import sys
 import logging
 import json
@@ -21,18 +22,28 @@ class ExtraFormatter(logging.Formatter):
 
 
 def setup_logging():
-    logging.basicConfig(
-        level=logging.INFO,
-        handlers=[
-            logging.FileHandler("logs/credits.log"),
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
+    formatter_tx = ExtraFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    formatter_std = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
-    # кастомний ExtraFormatter
-    formatter = ExtraFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-    for h in logging.getLogger().handlers:
-        h.setFormatter(formatter)
+    # INTERNAL credits
+    internal_handler = logging.FileHandler("logs/internal_credits.log")
+    internal_handler.setFormatter(formatter_tx)
+    internal_logger = logging.getLogger("[INTERNAL]")
+    internal_logger.setLevel(logging.INFO)
+    internal_logger.addHandler(internal_handler)
 
-    # приглушити SQLAlchemy engine логи
-    logging.getLogger("sqlalchemy.engine").disabled = True
+    # PUBLIC credits
+    public_handler = logging.FileHandler("logs/public_credits.log")
+    public_handler.setFormatter(formatter_tx)
+    public_logger = logging.getLogger("[PUBLIC]")
+    public_logger.setLevel(logging.INFO)
+    public_logger.addHandler(public_handler)
+
+    # ADMIN (без кастомного форматера)
+    admin_handler = logging.FileHandler("logs/admin.log")
+    admin_handler.setFormatter(formatter_std)
+    admin_logger = logging.getLogger("[ADMIN]")
+    admin_logger.setLevel(logging.INFO)
+    admin_logger.addHandler(admin_handler)
+
+    logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)

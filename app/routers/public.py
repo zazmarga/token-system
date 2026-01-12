@@ -121,8 +121,12 @@ async def credits_purchase_by_user(
         "metadata": {"payment_method_id": payload.payment_method_id}
     }
 
+    logger.info("Credits purchase by user. Request: ", extra=internal_payload)
+
     internal_result = await call_internal_api(
         "/api/internal/credits/add", internal_payload)
+
+    logger.info("Changed credits. Response:", extra=internal_result)
 
     return CreditsPurchaseResponse(
         success=True,
