@@ -4,10 +4,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import config
 from app.core.database import async_session
+from app.utils.service_balance import BalanceService
 
 
 # Dependency для отримання сесії
-async def get_db()-> AsyncSession:
+async def get_session()-> AsyncSession:
     async with async_session() as session:
         yield session
 
@@ -32,3 +33,8 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     if token != config.USER_TOKEN_BEARER:
         raise HTTPException(status_code=403, detail="Invalid user token")
     return "user_111"  # умовний користувач, DEBUG: auth-сервісу
+
+
+# Dependency: сервіс кредитів із Redis кеш
+def get_balance_service(session: AsyncSession = Depends(get_session)) -> BalanceService:
+    return BalanceService(session)

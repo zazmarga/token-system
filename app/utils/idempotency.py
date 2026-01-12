@@ -7,7 +7,7 @@ from app.models import Transaction
 
 
 async def check_idempotency(
-    db: AsyncSession,
+    session: AsyncSession,
     operation_id: str,
     expected_type: Optional[str] = None,
 ) -> Tuple[bool, Optional[Transaction]]:
@@ -18,7 +18,7 @@ async def check_idempotency(
     Якщо is_duplicate == True - операцію вже виконували раніше
     Якщо expected_type передано і тип не збігається - кидає 409
     """
-    result = await db.execute(
+    result = await session.execute(
         select(Transaction).where(Transaction.operation_id == operation_id)
     )
     tx: Transaction | None = result.scalar_one_or_none()

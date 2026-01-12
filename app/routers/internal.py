@@ -6,9 +6,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.dependencies import access_internal, get_db
-from app.utils.common import generate_transaction_id, user_existing_check, get_user_balance, calculate_credits_amount, \
-    get_base_rate_from_settings
+from app.core.dependencies import get_session, access_internal, get_balance_service
+from app.utils.common import (
+    generate_transaction_id, user_existing_check,
+    calculate_credits_amount, get_base_rate_from_settings
+)
 from app.utils.idempotency import check_idempotency
 from app.models import (
     Subscription, Transaction, Credits, TransactionType,
@@ -16,12 +18,14 @@ from app.models import (
 )
 from app.schemas.credits import (
     CreditsUserBalanceResponse, CreditsBase, CreditsUserCheckResponse,
-    CreditsAddResponse, CreditsAddRequest, CreditsCalculateResponse, CreditsCalculateRequest, CreditsChargeRequest,
-    CreditsChargeSuccessResponse, CreditsChargeNoSuccessResponse
+    CreditsAddResponse, CreditsAddRequest, CreditsCalculateResponse,
+    CreditsCalculateRequest, CreditsChargeRequest, CreditsChargeSuccessResponse,
+    CreditsChargeNoSuccessResponse
 )
 from app.schemas.subscription import (
     SubscriptionUpdateResponse, SubscriptionUpdateRequest,
     SubscriptionPlanInternal)
+from app.utils.service_balance import BalanceService
 
 
 # Internal API (для інших внутрішніх сервісів)
@@ -74,16 +78,17 @@ internal_router = APIRouter(prefix="/api/internal", tags=["Internal API"])
 )
 async def create_subscription_plan(
     payload: SubscriptionUpdateRequest,
-    db: AsyncSession = Depends(get_db)
+    session: AsyncSession = Depends(get_session),
+    balance_service: BalanceService = Depends(get_balance_service)
 ):
     user_id = payload.user_id
 
     # перевірка user існує? як що ні: Exception
-    await user_existing_check(db, user_id)
+    await user_existing_check(session, user_id)
 
     # Перевіряємо ідемпотентність
     is_duplicate, existing_tx = await check_idempotency(
-        db=db,
+        session=session,
         operation_id=payload.operation_id,
         expected_type=TransactionType.SUBSCRIPTION.value
     )
@@ -103,7 +108,7 @@ async def create_subscription_plan(
         )
 
     # завантажуємо підписку разом із планом
-    result = await db.execute(
+    result = await session.execute(
         select(Subscription)
         .options(selectinload(Subscription.plan))
         .where(Subscription.user_id == user_id)
@@ -111,28 +116,23 @@ async def create_subscription_plan(
     user_subscription: Subscription | None = result.scalar_one_or_none()
 
     # атомарна транзакція
-    async with db.begin_nested():
+    async with session.begin_nested():
         if not user_subscription:
             previous_tier = None
             user_subscription = Subscription(user_id=user_id, plan_id=payload.subscription_tier)
-            db.add(user_subscription)
-            plan = await db.get(SubscriptionPlan, payload.subscription_tier)
+            session.add(user_subscription)
+            plan = await session.get(SubscriptionPlan, payload.subscription_tier)
         else:
             previous_tier = user_subscription.plan.tier
             user_subscription.plan_id = payload.subscription_tier
             plan = user_subscription.plan
 
         # кредити
-        result = await db.execute(select(Credits).where(Credits.user_id == user_id))
-        user_credit = result.scalar_one_or_none()
-        if not user_credit:
-            user_credit = Credits(user_id=user_id, balance=0, total_earned=0)
-            db.add(user_credit)
-
-        balance_before = user_credit.balance
-        user_credit.balance += payload.credits_to_add
-        user_credit.total_earned += payload.credits_to_add
+        credits_before = await balance_service.get_credits(user_id)
+        balance_before = credits_before.balance
+        user_credit = await balance_service.update_credits(user_id, payload.credits_to_add)
         balance_after = user_credit.balance
+
         new_tier = payload.subscription_tier
         multiplier = plan.multiplier
         purchase_rate = plan.purchase_rate
@@ -159,8 +159,8 @@ async def create_subscription_plan(
                 "purchase_rate": float(purchase_rate),
             }
         )
-        db.add(new_tx)
-        await db.commit()
+        session.add(new_tx)
+        await session.commit()
 
     return SubscriptionUpdateResponse(
         success=True,
@@ -210,13 +210,14 @@ async def create_subscription_plan(
 )
 async def user_credits_balance(
     user_id: str,
-    db: AsyncSession = Depends(get_db)
+    session: AsyncSession = Depends(get_session),
+    balance_service: BalanceService = Depends(get_balance_service)
 ):
     # перевірка user існує? як що ні: Exception
-    await user_existing_check(db, user_id)
+    await user_existing_check(session, user_id)
 
     # завантажуємо підписку разом із планом
-    result = await db.execute(
+    result = await session.execute(
         select(Subscription)
         .options(selectinload(Subscription.plan))
         .where(Subscription.user_id == user_id)
@@ -240,8 +241,7 @@ async def user_credits_balance(
     plan = subscription.plan
 
     # кредити
-    result = await db.execute(select(Credits).where(Credits.user_id == user_id))
-    user_credits = result.scalar_one_or_none()
+    user_credits = await balance_service.get_credits(user_id)
 
     return CreditsUserBalanceResponse(
         user_id=user_id,
@@ -296,13 +296,14 @@ async def user_credits_balance(
 async def user_credits_checking(
     user_id: str,
     required_credits: Optional[int] = None,
-    db: AsyncSession = Depends(get_db)
+    session: AsyncSession = Depends(get_session),
+    balance_service: BalanceService = Depends(get_balance_service)
 ):
     # перевірка user існує? як що ні: Exception
-    await user_existing_check(db, user_id)
+    await user_existing_check(session, user_id)
 
     # завантажуємо підписку разом із планом
-    result = await db.execute(
+    result = await session.execute(
         select(
             Subscription,
             SubscriptionPlan.tier,
@@ -326,10 +327,8 @@ async def user_credits_checking(
     subscription, tier, multiplier = row
 
     # кредити
-    balance_result = await db.execute(
-        select(Credits.balance).where(Credits.user_id == user_id)
-    )
-    balance: int = balance_result.scalar_one_or_none() or 0
+    user_credits = await balance_service.get_credits(user_id)
+    balance = user_credits.balance
 
     if required_credits is None:
         sufficient = True
@@ -391,18 +390,19 @@ async def user_credits_checking(
     },
 )
 async def user_credits_add(
-        payload: CreditsAddRequest,
-        db: AsyncSession = Depends(get_db)
+    payload: CreditsAddRequest,
+    session: AsyncSession = Depends(get_session),
+    balance_service: BalanceService = Depends(get_balance_service)
 ):
     user_id = payload.user_id
 
     # перевірка user існує? як що ні: Exception
-    await user_existing_check(db, user_id)
+    await user_existing_check(session, user_id)
 
     # Перевіряємо ідемпотентність
     operation_id = payload.operation_id
     is_duplicate, existing_tx = await check_idempotency(
-        db=db,
+        session=session,
         operation_id=operation_id,
         expected_type=TransactionType.ADD.value
     )
@@ -423,7 +423,7 @@ async def user_credits_add(
         )
 
     # завантажуємо підписку разом із планом
-    result = await db.execute(
+    result = await session.execute(
         select(Subscription)
         .options(selectinload(Subscription.plan))
         .where(Subscription.user_id == user_id)
@@ -438,12 +438,12 @@ async def user_credits_add(
     purchase_rate = float(subscription.plan.purchase_rate)
 
     # завантаження базового курсу конвертації
-    settings = await db.execute(select(Settings))
+    settings = await session.execute(select(Settings))
     settings = settings.scalars().first()
     if not settings:
         settings = Settings()
-        db.add(settings)
-        await db.commit()
+        session.add(settings)
+        await session.commit()
     base_rate = settings.base_rate
 
     # розрахунок суми кредитів з урахуванням бонусу підписки
@@ -451,21 +451,15 @@ async def user_credits_add(
     credits_added = round(amount_usd * purchase_rate * base_rate)
 
     # кредити
-    result = await db.execute(select(Credits).where(Credits.user_id == user_id))
-    user_credits: Credits | None = result.scalar_one_or_none()
-    if not user_credits:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Not found: user '{user_id}' does not have subscription.",
-        )
+    user_credits = await balance_service.get_credits(user_id)
+    balance_before = user_credits.balance
 
     # оновити кредити та створити транзакцію
-    async with db.begin_nested():
+    async with session.begin_nested():
         # оновити кредити
-        user_credits.total_earned += credits_added
-        balance_before = user_credits.balance
-        user_credits.balance += credits_added
-        balance_after = balance_before + credits_added
+        user_credits = await balance_service.update_credits(user_id, credits_added)
+        balance_after = user_credits.balance
+
         id_tx = generate_transaction_id(operation_id)
 
         meta = payload.metadata
@@ -488,8 +482,8 @@ async def user_credits_add(
             created_at=datetime.now(timezone.utc),
             info=info
         )
-        db.add(new_tx)
-        await db.commit()
+        session.add(new_tx)
+        await session.commit()
 
     return CreditsAddResponse(
         success=True,
@@ -549,15 +543,16 @@ async def user_credits_add(
 )
 async def user_credits_calculate(
     payload: CreditsCalculateRequest,
-    db: AsyncSession = Depends(get_db)
+    session: AsyncSession = Depends(get_session),
+    balance_service: BalanceService = Depends(get_balance_service)
 ):
     user_id = payload.user_id
 
     # перевірка user існує? як що ні: Exception
-    await user_existing_check(db, user_id)
+    await user_existing_check(session, user_id)
 
     # отримуємо підписку і множник з плану
-    result = await db.execute(
+    result = await session.execute(
         select(Subscription, SubscriptionPlan.multiplier)
         .join(Subscription.plan)   # зв'язати з планом
         .where(Subscription.user_id == user_id)
@@ -572,10 +567,11 @@ async def user_credits_calculate(
     _, multiplier = row
 
     # отримати базову ставку
-    base_rate = await get_base_rate_from_settings(db)
+    base_rate = await get_base_rate_from_settings(session)
 
     # отримати баланс
-    user_balance = await get_user_balance(db, user_id)
+    user_credits = await balance_service.get_credits(user_id)
+    user_balance = user_credits.balance
 
     # розрахувати кредити до списання
     cost_usd = payload.cost_usd
@@ -642,15 +638,16 @@ async def user_credits_calculate(
 )
 async def user_credits_charge(
     payload: CreditsChargeRequest,
-    db: AsyncSession = Depends(get_db)
+    session: AsyncSession = Depends(get_session),
+    balance_service: BalanceService = Depends(get_balance_service)
 ):
     user_id = payload.user_id
 
     # перевірка user існує? як що ні: Exception
-    await user_existing_check(db, user_id)
+    await user_existing_check(session, user_id)
 
     # отримуємо підписку і множник з плану
-    result = await db.execute(
+    result = await session.execute(
         select(Subscription, SubscriptionPlan.multiplier)
         .join(Subscription.plan)   # зв'язати з планом
         .where(Subscription.user_id == user_id)
@@ -667,7 +664,7 @@ async def user_credits_charge(
     # Перевіряємо ідемпотентність
     operation_id = payload.operation_id
     is_duplicate, existing_tx = await check_idempotency(
-        db=db,
+        session=session,
         operation_id=operation_id,
         expected_type=TransactionType.CHARGE.value
     )
@@ -685,35 +682,31 @@ async def user_credits_charge(
         )
 
     # отримати базову ставку
-    base_rate = await get_base_rate_from_settings(db)
+    base_rate = await get_base_rate_from_settings(session)
 
     # отримати баланс
-    user_balance = await get_user_balance(db, user_id)
+    user_credits_before = await balance_service.get_credits(user_id)
+    balance_before_charge = user_credits_before.balance
 
     # розрахувати кредити до списання
     cost_usd = payload.cost_usd
     multiplier = float(multiplier)
     credits_to_charge = calculate_credits_amount(cost_usd, multiplier, base_rate)
-    balance_before_charge = user_balance   # може бути нульовим (!)
-    balance_after_charge = balance_before_charge - credits_to_charge
 
-    if balance_after_charge < 0:
+    if (balance_before_charge - credits_to_charge) < 0:
         return CreditsChargeNoSuccessResponse(
             error="insufficient_credits",
             user_id=user_id,
             required_credits=credits_to_charge,
-            current_balance=user_balance,
-            deficit=(credits_to_charge - user_balance)
+            current_balance=balance_before_charge,
+            deficit=(credits_to_charge - balance_before_charge)
         )
 
     # atomic operation (!) here: txn, credits
-    async with db.begin_nested():
-        # списати кредити з балансу user
-        result = await db.execute(select(Credits).where(Credits.user_id == user_id))
-        user_credits: Credits | None =  result.scalar_one_or_none()
-        if user_credits:
-            user_credits.total_spent += credits_to_charge
-            user_credits.balance -= credits_to_charge
+    async with session.begin_nested():
+        # списати кредити з балансу user (update credits)
+        user_credits = await balance_service.update_credits(user_id, -credits_to_charge)
+        new_balance = user_credits.balance
 
         # створити транзакцію
         id_tx = generate_transaction_id(operation_id)
@@ -725,13 +718,13 @@ async def user_credits_charge(
             cost_usd=cost_usd,
             credits=-credits_to_charge,
             balance_before=balance_before_charge,
-            balance_after=balance_after_charge,
+            balance_after=new_balance,
             description=payload.description,
             created_at=datetime.now(timezone.utc),
             info=payload.metadata
         )
-        db.add(new_tx)
-        await db.commit()
+        session.add(new_tx)
+        await session.commit()
 
     return CreditsChargeSuccessResponse(
         transaction_id=id_tx,
@@ -739,6 +732,6 @@ async def user_credits_charge(
         cost_usd=cost_usd,
         credits_charged=credits_to_charge,
         balance_before=balance_before_charge,
-        balance_after=balance_after_charge,
+        balance_after=new_balance,
         operation_id=operation_id
     )

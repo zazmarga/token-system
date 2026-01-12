@@ -15,6 +15,7 @@ class AppConfig(BaseSettings):
     DEBUG_MODE: bool = False
 
     INTERNAL_HOST: str
+    INTERNAL_PORT: str
 
     REDIS_HOST: str
     REDIS_PORT: str

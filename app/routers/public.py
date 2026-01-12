@@ -5,7 +5,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.dependencies import get_db, get_current_user
+from app.core.dependencies import get_session, get_current_user
 from app.models import TransactionSource, Credits, TransactionType, Transaction
 from app.models.subscription import SubscriptionPlan, Subscription
 from app.schemas.base import UserCreditsBase
@@ -41,11 +41,11 @@ public_router = APIRouter(prefix="/api/v1", tags=["Public API"])
     },
 )
 async def list_available_subscription_plans(
-    db: AsyncSession = Depends(get_db)
+    session: AsyncSession = Depends(get_session)
 ):
     query = select(SubscriptionPlan).where(SubscriptionPlan.active.is_(True))
 
-    result = await db.execute(query)
+    result = await session.execute(query)
     plans = result.scalars().all()
 
     return SubscriptionPlanPublicList(plans=plans)
@@ -95,7 +95,8 @@ async def list_available_subscription_plans(
 async def credits_purchase_by_user(
         payload: CreditsPurchasePayload,
         user_id: str = Depends(get_current_user),
-        db: AsyncSession = Depends(get_db)
+        session: AsyncSession = Depends(get_session)
+
 ):
     source = TransactionSource.PURCHASE.value
 
@@ -105,7 +106,7 @@ async def credits_purchase_by_user(
             detail=f"Payment '{payload.payment_method_id}' not completed."
         )
 
-    operation_id = await generate_operation_id(db, source=source)
+    operation_id = await generate_operation_id(session, source=source)
 
     internal_payload = {
         "user_id": user_id,
@@ -171,10 +172,10 @@ async def credits_purchase_by_user(
 )
 async def user_subscription(
         user_id: str = Depends(get_current_user),
-        db: AsyncSession = Depends(get_db)
+        session: AsyncSession = Depends(get_session)
 ):
     # підписка та план підписки
-    result = await db.execute(
+    result = await session.execute(
         select(Subscription)
         .options(selectinload(Subscription.plan))
         .where(Subscription.user_id == user_id)
@@ -190,7 +191,7 @@ async def user_subscription(
     plan = subscription.plan
 
     # кредити
-    result = await db.execute(
+    result = await session.execute(
         select(Credits)
         .where(Credits.user_id == user_id)
     )
@@ -252,7 +253,7 @@ async def list_user_transactions(
     offset: int = Query(0, ge=0),
     type: Optional[TransactionType] = Query(None),
     user_id: str = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    session: AsyncSession = Depends(get_session)
 ):
     # базовий запит
     stmt = select(Transaction).where(Transaction.user_id == user_id)
@@ -265,12 +266,12 @@ async def list_user_transactions(
     count_stmt = select(func.count()).select_from(Transaction).where(Transaction.user_id == user_id)
     if type:
         count_stmt = count_stmt.where(Transaction.type == type.value.upper())
-    total_result = await db.execute(count_stmt)
+    total_result = await session.execute(count_stmt)
     total = total_result.scalar_one()
 
     # пагінація
     stmt = stmt.order_by(Transaction.created_at.desc()).limit(limit).offset(offset)
-    result = await db.execute(stmt)
+    result = await session.execute(stmt)
     db_transactions: List[Transaction] = result.scalars().all()
 
     transactions = [serialize_transaction(t) for t in db_transactions]

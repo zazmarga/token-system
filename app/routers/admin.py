@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, status, HTTPException, Query
 from sqlalchemy import select, func, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dependencies import access_admin, get_db
+from app.core.dependencies import access_admin, get_session
 from app.models import Credits, Transaction, TransactionType
 from app.models.user import User
 from app.models.settings import Settings
@@ -57,16 +57,16 @@ admin_router = APIRouter(prefix="/api/admin", tags=["Admin API"])
 )
 async def update_exchange_rate(
         payload: ExchangeRateUpdate,
-        db: AsyncSession = Depends(get_db)
+        session: AsyncSession = Depends(get_session)
 ):
-    settings = await db.execute(select(Settings))
+    settings = await session.execute(select(Settings))
     settings = settings.scalars().first()
     if not settings:
         # створюємо новий запис
         new_settings = Settings(base_rate=payload.base_rate)
-        db.add(new_settings)
-        await db.commit()
-        await db.refresh(new_settings)
+        session.add(new_settings)
+        await session.commit()
+        await session.refresh(new_settings)
         return {
             "success": True,
             "old_base_rate": payload.base_rate,
@@ -76,8 +76,8 @@ async def update_exchange_rate(
 
     old_rate = settings.base_rate
     settings.base_rate = payload.base_rate
-    await db.commit()
-    await db.refresh(settings)
+    await session.commit()
+    await session.refresh(settings)
 
     return {
         "success": True,
@@ -123,16 +123,16 @@ async def update_exchange_rate(
 )
 async def create_subscription_plan(
         payload: SubscriptionPlanCreate,
-        db: AsyncSession = Depends(get_db)
+        session: AsyncSession = Depends(get_session)
 ):
-    plan_by_tier = await db.get(SubscriptionPlan, payload.tier)
+    plan_by_tier = await session.get(SubscriptionPlan, payload.tier)
     if plan_by_tier:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Unique: tier='{payload.tier}' already exists."
         )
 
-    result = await db.execute(select(SubscriptionPlan).where(SubscriptionPlan.name == payload.name))
+    result = await session.execute(select(SubscriptionPlan).where(SubscriptionPlan.name == payload.name))
     plan_by_name = result.scalar_one_or_none()
     if plan_by_name:
         raise HTTPException(
@@ -143,9 +143,9 @@ async def create_subscription_plan(
     new_plan = SubscriptionPlan(
         **payload.model_dump(exclude_unset=True, exclude_none=True)
     )
-    db.add(new_plan)
-    await db.commit()
-    await db.refresh(new_plan)
+    session.add(new_plan)
+    await session.commit()
+    await session.refresh(new_plan)
     return SubscriptionPlanResponse(success=True, plan=new_plan)
 
 
@@ -186,16 +186,16 @@ async def create_subscription_plan(
 async def update_subscription_plan(
         tier: str,
         payload: SubscriptionPlanUpdate,
-        db: AsyncSession = Depends(get_db)
+        session: AsyncSession = Depends(get_session)
 ):
-    plan = await db.get(SubscriptionPlan, tier)
+    plan: SubscriptionPlan | None = await session.get(SubscriptionPlan, tier)
     if not plan:
         raise HTTPException(status_code=404, detail=f"Plan '{tier}' not found")
 
     for k, v in payload.model_dump(exclude_unset=True, exclude_none=True).items():
         setattr(plan, k, v)
-        await db.commit()
-        await db.refresh(plan)
+        await session.commit()
+        await session.refresh(plan)
     return SubscriptionPlanResponse(success=True, plan=plan)
 
 
@@ -235,13 +235,13 @@ async def update_subscription_plan(
 )
 async def delete_subscription_plan(
         tier: str,
-        db: AsyncSession = Depends(get_db)
+        session: AsyncSession = Depends(get_session)
 ):
-    plan = await db.get(SubscriptionPlan, tier)
+    plan = await session.get(SubscriptionPlan, tier)
     if not plan:
         raise HTTPException(status_code=404, detail=f"Plan '{tier}' not found")
-    await db.delete(plan)
-    await db.commit()
+    await session.delete(plan)
+    await session.commit()
     return {
         "success": True,
         "message": "Subscription plan deleted",
@@ -277,7 +277,7 @@ async def delete_subscription_plan(
 )
 async def list_subscription_plans(
     active_only: bool = False,
-    db: AsyncSession = Depends(get_db)
+    session: AsyncSession = Depends(get_session)
 ):
     query = (
         select(
@@ -292,7 +292,7 @@ async def list_subscription_plans(
     if active_only:
         query = query.where(SubscriptionPlan.active.is_(True))
 
-    result = await db.execute(query)
+    result = await session.execute(query)
     rows = result.all()
 
     plans_with_counts = [
@@ -343,16 +343,16 @@ async def list_subscription_plans(
 async def update_multiplier(
         tier: str,
         multiplier: float,
-        db: AsyncSession = Depends(get_db)
+        session: AsyncSession = Depends(get_session)
 ):
-    plan = await db.get(SubscriptionPlan, tier)
+    plan = await session.get(SubscriptionPlan, tier)
     if not plan:
         raise HTTPException(status_code=404, detail=f"Plan '{tier}' not found")
 
     old_multiplier = plan.multiplier
     plan.multiplier = multiplier
-    await db.commit()
-    await db.refresh(plan)
+    await session.commit()
+    await session.refresh(plan)
 
     return MultiplierUpdateResponse(
         success=True,
@@ -400,16 +400,16 @@ async def update_multiplier(
 async def update_purchase_rate(
         tier: str,
         purchase_rate: float,
-        db: AsyncSession = Depends(get_db)
+        session: AsyncSession = Depends(get_session)
 ):
-    plan = await db.get(SubscriptionPlan, tier)
+    plan = await session.get(SubscriptionPlan, tier)
     if not plan:
         raise HTTPException(status_code=404, detail=f"Plan '{tier}' not found")
 
     old_purchase_rate = plan.purchase_rate
     plan.purchase_rate = purchase_rate
-    await db.commit()
-    await db.refresh(plan)
+    await session.commit()
+    await session.refresh(plan)
 
     return PurchaseRateUpdateResponse(
         success=True,
@@ -450,7 +450,7 @@ async def get_usage_statistics(
     start_date: date = Query(..., description="Start date (ISO 8601, e.g. 2026-01-01)"),
     end_date: date = Query(..., description="End date (ISO 8601, e.g. 2026-01-31)"),
     tier: Optional[str] = Query(None, description="Tier: optional"),
-    db: AsyncSession = Depends(get_db)
+    session: AsyncSession = Depends(get_session)
 ):
     # формування дати-часу з дати
     start: datetime = datetime.combine(start_date, time(0, 0, 0), tzinfo=timezone.utc)
@@ -465,7 +465,7 @@ async def get_usage_statistics(
         .group_by(SubscriptionPlan.tier)
     )
 
-    result = await db.execute(stmt)
+    result = await session.execute(stmt)
     rows = result.all()
 
     subscriptions = {tier: count for tier, count in rows}
@@ -492,7 +492,7 @@ async def get_usage_statistics(
     if tier:
         stmt = stmt.where(SubscriptionPlan.tier == tier)
 
-    result = await db.execute(stmt)
+    result = await session.execute(stmt)
     row = result.one()
 
     total_earned = row.total_earned or 0
@@ -515,7 +515,7 @@ async def get_usage_statistics(
     if tier:
         stmt = stmt.where(SubscriptionPlan.tier == tier)
 
-    result = await db.execute(stmt)
+    result = await session.execute(stmt)
     row = result.one()
 
     total = row.total or 0
