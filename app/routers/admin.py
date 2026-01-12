@@ -25,6 +25,10 @@ from app.schemas.subscription import (
     PurchaseRateUpdateResponse,
 )
 
+import logging
+logger = logging.getLogger("[ADMIN]")
+
+
 # Admin API
 admin_router = APIRouter(prefix="/api/admin", tags=["Admin API"])
 

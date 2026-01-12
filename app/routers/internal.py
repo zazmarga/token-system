@@ -13,7 +13,7 @@ from app.utils.common import (
 )
 from app.utils.idempotency import check_idempotency
 from app.models import (
-    Subscription, Transaction, Credits, TransactionType,
+    Subscription, Transaction, TransactionType,
     TransactionSource, SubscriptionPlan, Settings
 )
 from app.schemas.credits import (
@@ -25,7 +25,11 @@ from app.schemas.credits import (
 from app.schemas.subscription import (
     SubscriptionUpdateResponse, SubscriptionUpdateRequest,
     SubscriptionPlanInternal)
+from app.utils.logging import get_extra_credits_log
 from app.utils.service_balance import BalanceService
+
+import logging
+logger = logging.getLogger("[INTERNAL]")
 
 
 # Internal API (для інших внутрішніх сервісів)
@@ -76,7 +80,7 @@ internal_router = APIRouter(prefix="/api/internal", tags=["Internal API"])
         },
     },
 )
-async def create_subscription_plan(
+async def create_user_subscription_plan(
     payload: SubscriptionUpdateRequest,
     session: AsyncSession = Depends(get_session),
     balance_service: BalanceService = Depends(get_balance_service)
@@ -96,6 +100,7 @@ async def create_subscription_plan(
     if is_duplicate and existing_tx is not None:
         metadata = existing_tx.info
         # Повертаємо той самий результат, що був раніше
+        logger.warning("Found duplicate transaction: ", extra=get_extra_credits_log(existing_tx))
         return SubscriptionUpdateResponse(
             success=True,
             user_id=existing_tx.user_id,
@@ -159,6 +164,10 @@ async def create_subscription_plan(
                 "purchase_rate": float(purchase_rate),
             }
         )
+
+        logger.info(f"Updated credits. Transaction:", extra=get_extra_credits_log(new_tx))
+
+        session.add(new_tx)
         session.add(new_tx)
         await session.commit()
 

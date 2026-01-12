@@ -20,6 +20,9 @@ from app.utils.common import generate_operation_id, is_payment_complete
 from app.utils.http_client import call_internal_api
 from app.utils.service_balance import BalanceService
 
+import logging
+logger = logging.getLogger("[PUBLIC]")
+
 
 # API для фронтенду (зовнішні користувачі)
 public_router = APIRouter(prefix="/api/v1", tags=["Public API"])
