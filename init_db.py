@@ -1,6 +1,6 @@
-# В main.py або окремому скрипті
 from app.core.database import engine, Base
-from app.models.settings import Settings
+
+from app.models.settings import Settings, AdminLog, AdminOperationType
 from app.models.user import User
 from app.models.subscription import Subscription
 from app.models.credits import Credits

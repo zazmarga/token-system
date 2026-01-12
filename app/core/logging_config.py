@@ -1,29 +1,39 @@
-import os
-import sys
 import logging
 import json
 
 from app.models import Transaction
+from app.models.settings import AdminLog
 
-
+# logging credits (transactions)
 TRANSACTION_FIELDS = {c.name for c in Transaction.__table__.columns}
+# admin logging
+ADMIN_FIELDS = {c.name for c in AdminLog.__table__.columns}
 
 
-class ExtraFormatter(logging.Formatter):
+class ModelFormatter(logging.Formatter):
+    def __init__(self, fmt=None, fields=None):
+        super().__init__(fmt)
+        self.fields = fields or set()
+
     def format(self, record):
         base = super().format(record)
-        extras = {
-            k: v for k, v in record.__dict__.items()
-            if k in TRANSACTION_FIELDS
-        }
+        extras = {k: v for k, v in record.__dict__.items() if k in self.fields}
         if extras:
             base += " " + json.dumps(extras, default=str)
         return base
 
 
+# setup
 def setup_logging():
-    formatter_tx = ExtraFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-    formatter_std = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    formatter_tx = ModelFormatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        fields=TRANSACTION_FIELDS
+    )
+
+    formatter_admin = ModelFormatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        fields=ADMIN_FIELDS
+    )
 
     # INTERNAL credits
     internal_handler = logging.FileHandler("logs/internal_credits.log")
@@ -41,7 +51,7 @@ def setup_logging():
 
     # ADMIN (без кастомного форматера)
     admin_handler = logging.FileHandler("logs/admin.log")
-    admin_handler.setFormatter(formatter_std)
+    admin_handler.setFormatter(formatter_admin)
     admin_logger = logging.getLogger("[ADMIN]")
     admin_logger.setLevel(logging.INFO)
     admin_logger.addHandler(admin_handler)

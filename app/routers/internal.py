@@ -6,7 +6,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.dependencies import get_session, access_internal, get_balance_service
+from app.core.dependencies import (
+    get_session, access_internal, get_balance_service
+)
 from app.utils.common import (
     generate_transaction_id, user_existing_check,
     calculate_credits_amount, get_base_rate_from_settings
@@ -25,7 +27,7 @@ from app.schemas.credits import (
 from app.schemas.subscription import (
     SubscriptionUpdateResponse, SubscriptionUpdateRequest,
     SubscriptionPlanInternal)
-from app.utils.logging import get_extra_credits_log
+from app.utils.logging import get_extra_data_log
 from app.utils.service_balance import BalanceService
 
 import logging
@@ -100,7 +102,10 @@ async def create_user_subscription_plan(
     if is_duplicate and existing_tx is not None:
         metadata = existing_tx.info
         # Повертаємо той самий результат, що був раніше
-        logger.warning("Found duplicate transaction: ", extra=get_extra_credits_log(existing_tx))
+        logger.warning(
+            "Found duplicate transaction: ",
+            extra=get_extra_data_log(existing_tx)
+        )
         return SubscriptionUpdateResponse(
             success=True,
             user_id=existing_tx.user_id,
@@ -124,7 +129,9 @@ async def create_user_subscription_plan(
     async with session.begin_nested():
         if not user_subscription:
             previous_tier = None
-            user_subscription = Subscription(user_id=user_id, plan_id=payload.subscription_tier)
+            user_subscription = Subscription(
+                user_id=user_id, plan_id=payload.subscription_tier
+            )
             session.add(user_subscription)
             plan = await session.get(SubscriptionPlan, payload.subscription_tier)
         else:
@@ -135,7 +142,9 @@ async def create_user_subscription_plan(
         # кредити
         credits_before = await balance_service.get_credits(user_id)
         balance_before = credits_before.balance
-        user_credit = await balance_service.update_credits(user_id, payload.credits_to_add)
+        user_credit = await balance_service.update_credits(
+            user_id, payload.credits_to_add
+        )
         balance_after = user_credit.balance
 
         new_tier = payload.subscription_tier
@@ -165,7 +174,10 @@ async def create_user_subscription_plan(
             }
         )
 
-        logger.info(f"Updated credits. Transaction:", extra=get_extra_credits_log(new_tx))
+        logger.info(
+            f"Updated credits. Transaction:",
+            extra=get_extra_data_log(new_tx)
+        )
 
         session.add(new_tx)
         session.add(new_tx)
@@ -419,7 +431,10 @@ async def user_credits_add(
     if is_duplicate and existing_tx is not None:
         metadata = existing_tx.info
         # Повертаємо той самий результат, що був раніше
-        logger.warning("Found duplicate transaction: ", extra=get_extra_credits_log(existing_tx))
+        logger.warning(
+            "Found duplicate transaction: ",
+            extra=get_extra_data_log(existing_tx)
+        )
         return CreditsAddResponse(
             success=True,
             transaction_id=existing_tx.id,
@@ -467,7 +482,9 @@ async def user_credits_add(
     # оновити кредити та створити транзакцію
     async with session.begin_nested():
         # оновити кредити
-        user_credits = await balance_service.update_credits(user_id, credits_added)
+        user_credits = await balance_service.update_credits(
+            user_id, credits_added
+        )
         balance_after = user_credits.balance
 
         id_tx = generate_transaction_id(operation_id)
@@ -493,7 +510,10 @@ async def user_credits_add(
             info=info
         )
 
-        logger.info(f"Updated credits. Transaction:", extra=get_extra_credits_log(new_tx))
+        logger.info(
+            f"Updated credits. Transaction:",
+            extra=get_extra_data_log(new_tx)
+        )
 
         session.add(new_tx)
         await session.commit()
@@ -684,7 +704,10 @@ async def user_credits_charge(
 
     if is_duplicate and existing_tx is not None:
         # Повертаємо той самий результат, що був раніше
-        logger.warning("Found duplicate transaction: ", extra=get_extra_credits_log(existing_tx))
+        logger.warning(
+            "Found duplicate transaction: ",
+            extra=get_extra_data_log(existing_tx)
+        )
         return CreditsChargeSuccessResponse(
             transaction_id=existing_tx.id,
             user_id=existing_tx.user_id,
@@ -719,7 +742,9 @@ async def user_credits_charge(
     # atomic operation (!) here: txn, credits
     async with session.begin_nested():
         # списати кредити з балансу user (update credits)
-        user_credits = await balance_service.update_credits(user_id, -credits_to_charge)
+        user_credits = await balance_service.update_credits(
+            user_id, -credits_to_charge
+        )
         new_balance = user_credits.balance
 
         # створити транзакцію
@@ -738,7 +763,10 @@ async def user_credits_charge(
             info=payload.metadata
         )
 
-        logger.info(f"Updated credits. Transaction:", extra=get_extra_credits_log(new_tx))
+        logger.info(
+            f"Updated credits. Transaction:",
+            extra=get_extra_data_log(new_tx)
+        )
 
         session.add(new_tx)
         await session.commit()
