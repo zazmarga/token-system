@@ -419,6 +419,7 @@ async def user_credits_add(
     if is_duplicate and existing_tx is not None:
         metadata = existing_tx.info
         # Повертаємо той самий результат, що був раніше
+        logger.warning("Found duplicate transaction: ", extra=get_extra_credits_log(existing_tx))
         return CreditsAddResponse(
             success=True,
             transaction_id=existing_tx.id,
@@ -491,6 +492,9 @@ async def user_credits_add(
             created_at=datetime.now(timezone.utc),
             info=info
         )
+
+        logger.info(f"Updated credits. Transaction:", extra=get_extra_credits_log(new_tx))
+
         session.add(new_tx)
         await session.commit()
 
@@ -680,6 +684,7 @@ async def user_credits_charge(
 
     if is_duplicate and existing_tx is not None:
         # Повертаємо той самий результат, що був раніше
+        logger.warning("Found duplicate transaction: ", extra=get_extra_credits_log(existing_tx))
         return CreditsChargeSuccessResponse(
             transaction_id=existing_tx.id,
             user_id=existing_tx.user_id,
@@ -732,6 +737,9 @@ async def user_credits_charge(
             created_at=datetime.now(timezone.utc),
             info=payload.metadata
         )
+
+        logger.info(f"Updated credits. Transaction:", extra=get_extra_credits_log(new_tx))
+
         session.add(new_tx)
         await session.commit()
 
