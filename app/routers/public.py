@@ -5,8 +5,8 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.dependencies import get_session, get_current_user
-from app.models import TransactionSource, Credits, TransactionType, Transaction
+from app.core.dependencies import get_session, get_current_user, get_balance_service
+from app.models import TransactionSource, TransactionType, Transaction
 from app.models.subscription import SubscriptionPlan, Subscription
 from app.schemas.base import UserCreditsBase
 from app.schemas.credits import CreditsPurchaseResponse, CreditsPurchasePayload
@@ -18,6 +18,7 @@ from app.schemas.subscription import (
 from app.schemas.transactions import TransactionPublicPaginatedList
 from app.utils.common import generate_operation_id, is_payment_complete
 from app.utils.http_client import call_internal_api
+from app.utils.service_balance import BalanceService
 
 
 # API для фронтенду (зовнішні користувачі)
@@ -171,8 +172,9 @@ async def credits_purchase_by_user(
     },
 )
 async def user_subscription(
-        user_id: str = Depends(get_current_user),
-        session: AsyncSession = Depends(get_session)
+    user_id: str = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    balance_service: BalanceService = Depends(get_balance_service)
 ):
     # підписка та план підписки
     result = await session.execute(
@@ -191,11 +193,7 @@ async def user_subscription(
     plan = subscription.plan
 
     # кредити
-    result = await session.execute(
-        select(Credits)
-        .where(Credits.user_id == user_id)
-    )
-    user_credits: Credits | None = result.scalar_one_or_none()
+    user_credits = await balance_service.get_credits(user_id)
 
     return UserSubscriptionResponse(
         subscription=SubscriptionPlanPublicDetail(
