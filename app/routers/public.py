@@ -114,8 +114,7 @@ async def credits_purchase_by_user(
         )
 
     # створення operation_id
-    # operation_id = generate_operation_id(source=source)   ????????????????????
-    # створене демонстрації роботи тестового у public API
+    # для демонстрації роботи тестового у public API
     operation_id = f"op_user_{payload.payment_method_id}"
 
     # Перевіряємо ідемпотентність

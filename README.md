@@ -110,18 +110,24 @@
 
 `INSERT INTO "users" (id) VALUES ('user_111');`
 
-**user_111** - буде використано для перевірки **Authorization: Bearer my-secret-user-token**
+**user_111 - (!) обов'язково**: буде використано для перевірки **Authorization: Bearer my-secret-user-token**
 
 ### Відкриті Token System API
 
 http://localhost:8000/docs
 
-1) додати base_rate  (default=10_000)
-2) додати subscription plan
-3) змінити subscription plan користувача
+1) Admin API: `/api/admin/settings/exchange-rate`: додати base_rate  (default=10_000) 
+2) Admin API: `/api/admin/subscription-plans`: додати subscription plan
+3) Internal API: `/api/internal/subscription/update`: змінити subscription plan користувача
 4) ...
 
 #### Запуск tests/
 дуже спрощене тестування, тільки зовнішній вигляд деяких GET API 
 
 `docker exec -it token_system-api-1 pytest tests/ -v`
+
+#### Check redis cache
+
+`docker exec -it token_system-redis-1 redis-cli`
+
+`KEYS *`

@@ -584,6 +584,10 @@ async def get_usage_statistics(
     tier: Optional[str] = Query(None, description="Tier: optional"),
     session: AsyncSession = Depends(get_session)
 ):
+    if tier:
+        # перевірка tier існує? як що ні: Exception
+        await tier_existing_check(session, tier)
+
     # формування дати-часу з дати
     start: datetime = datetime.combine(start_date, time(0, 0, 0), tzinfo=timezone.utc)
     end: datetime = datetime.combine(end_date, time(23, 59, 59), tzinfo=timezone.utc)
