@@ -1,8 +1,7 @@
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.models import Settings, User
+from app.models import Transaction, Settings, User
 
 
 def generate_transaction_id(operation_id: str) -> str:
@@ -19,24 +18,34 @@ async def is_payment_complete(payment_method_id: str) -> bool:
 
 
 async def generate_operation_id(session: AsyncSession, source: str) -> str:
-	# У цьому завданні я використовую простий лічильник у Settings.
-	# У реальному середовищі треба додати механізм захисту від конкурентних запитів
+	# У цьому завданні я використовую просту імітацію: лічильник у Settings
+	# 	і максимальна числова частина у operation_id із transactions
+	# можна змінити логіку на потрібну
 
-	# отримуємо Settings
+	# отримати поточні settings
 	settings = await session.scalar(select(Settings))
 	if not settings:
-		settings = Settings()
+		settings = Settings(current_operation_id=1)
 		session.add(settings)
 		await session.commit()
 
-	# беремо поточний номер
-	op_number = settings.current_operation_id
+	# знайти максимальний номер у Transaction
+	result = await session.execute(
+		select(Transaction.operation_id)
+	)
+	ids = [row[0] for row in result.scalars().all()]
+	# витягнути числа
+	numbers = [int(op_id.split("_")[-1]) for op_id in ids if op_id]
+	max_tx_number = max(numbers) if numbers else 0
 
-	# формуємо operation_id
-	operation_id = f"op_{source}_{op_number}"
+	# обчислити новий номер
+	next_number = max(settings.current_operation_id, max_tx_number + 1)
 
-	# збільшуємо на 1
-	settings.current_operation_id += 1
+	# сформувати operation_id
+	operation_id = f"op_{source}_{next_number}"
+
+	# оновити settings
+	settings.current_operation_id = next_number + 1
 	await session.commit()
 
 	return operation_id

@@ -638,8 +638,8 @@ async def get_usage_statistics(
         )
         .join(Subscription, Subscription.user_id == Transaction.user_id)
         .join(SubscriptionPlan, Subscription.plan_id == SubscriptionPlan.tier)
-        .where(Transaction.created_at >= start_date)
-        .where(Transaction.created_at < end_date)
+        .where(Transaction.created_at >= start)
+        .where(Transaction.created_at <= end)
     )
 
     if tier:
