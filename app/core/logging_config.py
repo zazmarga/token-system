@@ -49,7 +49,7 @@ def setup_logging():
     public_logger.setLevel(logging.INFO)
     public_logger.addHandler(public_handler)
 
-    # ADMIN (без кастомного форматера)
+    # ADMIN
     admin_handler = logging.FileHandler("logs/admin.log")
     admin_handler.setFormatter(formatter_admin)
     admin_logger = logging.getLogger("[ADMIN]")

@@ -37,7 +37,9 @@ class BalanceService:
 
 		if not credit:
 			# якщо користувач новий - створюємо пустий запис
-			credit = Credits(user_id=user_id, balance=0, total_earned=0, total_spent=0)
+			credit = Credits(
+				user_id=user_id, balance=0, total_earned=0, total_spent=0
+			)
 			self.session.add(credit)
 			await self.session.commit()
 
@@ -63,7 +65,9 @@ class BalanceService:
 			credit = result.scalar_one_or_none()
 
 			if not credit:
-				credit = Credits(user_id=user_id, balance=0, total_earned=0, total_spent=0)
+				credit = Credits(
+					user_id=user_id, balance=0, total_earned=0, total_spent=0
+				)
 				self.session.add(credit)
 
 			if delta > 0:

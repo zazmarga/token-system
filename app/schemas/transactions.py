@@ -1,7 +1,9 @@
 from datetime import datetime
 from typing import List, Optional, Literal, Union
 
-from pydantic import BaseModel, Field, field_serializer, ConfigDict, computed_field
+from pydantic import (
+	BaseModel, Field, field_serializer, ConfigDict, computed_field
+)
 
 
 class TransactionBase(BaseModel):

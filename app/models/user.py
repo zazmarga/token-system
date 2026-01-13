@@ -10,7 +10,9 @@ class User(Base):
     id = Column(String, primary_key=True)
 
     # один користувач має один запис у Subscription
-    subscription = relationship("Subscription", back_populates="user", uselist=False)
+    subscription = relationship(
+        "Subscription", back_populates="user", uselist=False
+    )
 
     # один користувач має один запис у Credits
     credit = relationship("Credits", back_populates="user", uselist=False)

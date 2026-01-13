@@ -164,9 +164,6 @@ async def create_subscription_plan(
                     .where(SubscriptionPlan.name == payload.name)))
     plan_by_name = result.scalar_one_or_none()
     if plan_by_name:
-        #  ????????????????????
-        # logger.warning(
-        #     f"Subscription plan tier='{payload.name}' already exists.")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Unique: tier='{payload.name}' already exists."
@@ -176,7 +173,6 @@ async def create_subscription_plan(
 
     session.add(new_plan)
     await session.flush()
-    # await session.commit()  # ili flush()
     await session.refresh(new_plan)
 
     # create new AdminLog
@@ -193,7 +189,8 @@ async def create_subscription_plan(
     await session.commit()
     await session.refresh(new_admin_log)
     logger.info(
-        "Created new subscription plan. AdminLog:", extra=get_extra_data_log(new_admin_log)
+        "Created new subscription plan. AdminLog:",
+        extra=get_extra_data_log(new_admin_log)
     )
 
     return SubscriptionPlanResponse(success=True, plan=new_plan)
@@ -325,7 +322,8 @@ async def delete_subscription_plan(
     await session.commit()
     await session.refresh(new_admin_log)
     logger.info(
-        "Deleted subscription plan. AdminLog:", extra=get_extra_data_log(new_admin_log)
+        "Deleted subscription plan. AdminLog:",
+        extra=get_extra_data_log(new_admin_log)
     )
 
     return {
@@ -458,7 +456,8 @@ async def update_multiplier(
     await session.refresh(plan)
     await session.refresh(new_admin_log)
     logger.info(
-        "Updated multiplier. AdminLog:", extra=get_extra_data_log(new_admin_log)
+        "Updated multiplier. AdminLog:",
+        extra=get_extra_data_log(new_admin_log)
     )
 
     return MultiplierUpdateResponse(
@@ -537,7 +536,8 @@ async def update_purchase_rate(
     await session.refresh(new_admin_log)
 
     logger.info(
-        "Updated purchase rate. AdminLog:", extra=get_extra_data_log(new_admin_log)
+        "Updated purchase rate. AdminLog:",
+        extra=get_extra_data_log(new_admin_log)
     )
 
 

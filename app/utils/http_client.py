@@ -26,4 +26,6 @@ async def call_internal_api(endpoint: str, payload: dict) -> dict:
     try:
         return response.json()
     except ValueError:
-        raise HTTPException(status_code=500, detail="Internal API did not return JSON")
+        raise HTTPException(
+            status_code=500, detail="Internal API did not return JSON"
+        )

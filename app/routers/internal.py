@@ -31,6 +31,7 @@ from app.utils.logging import get_extra_data_log
 from app.utils.service_balance import BalanceService
 
 import logging
+
 logger = logging.getLogger("[INTERNAL]")
 
 

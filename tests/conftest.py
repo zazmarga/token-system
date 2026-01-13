@@ -5,11 +5,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import (
+	create_async_engine, AsyncSession, async_sessionmaker
+)
 
 from app.main import app
 from app.core.config import config
-from app.core.dependencies import get_db
+from app.core.dependencies import get_session
 
 
 # Override get_db для кожного тесту окремо
@@ -33,7 +35,7 @@ async def db_session():
 			yield session
 
 	# Override на час тесту
-	app.dependency_overrides[get_db] = get_test_db
+	app.dependency_overrides[get_session] = get_test_db
 
 	yield  # Тест виконується тут
 

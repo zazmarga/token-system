@@ -1,4 +1,6 @@
-from sqlalchemy import Column, Integer, String, DECIMAL, Boolean, DateTime, func, ForeignKey
+from sqlalchemy import (
+	Column, Integer, String, DECIMAL, Boolean, DateTime, func, ForeignKey
+)
 from sqlalchemy.orm import relationship, validates
 
 from app.core.database import Base

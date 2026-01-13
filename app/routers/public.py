@@ -21,6 +21,7 @@ from app.utils.http_client import call_internal_api
 from app.utils.service_balance import BalanceService
 
 import logging
+
 logger = logging.getLogger("[PUBLIC]")
 
 
@@ -268,7 +269,8 @@ async def list_user_transactions(
         stmt = stmt.where(Transaction.type == type.value.upper())
 
     # підрахунок total
-    count_stmt = select(func.count()).select_from(Transaction).where(Transaction.user_id == user_id)
+    count_stmt = (select(func.count()).select_from(Transaction)
+                  .where(Transaction.user_id == user_id))
     if type:
         count_stmt = count_stmt.where(Transaction.type == type.value.upper())
     total_result = await session.execute(count_stmt)

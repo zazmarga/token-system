@@ -35,6 +35,5 @@ async def test_list_admin_subscription_plans(async_client):
         # усі очікувані поля присутні
         assert expected_fields.issubset(plan.keys())
 
-        # (!) перевірити значення user_count
     else:
         pytest.skip("No plans yet.")
