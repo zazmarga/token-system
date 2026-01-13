@@ -76,10 +76,10 @@ class BalanceService:
 				credit.total_spent += abs(delta)
 
 			credit.balance += delta
-			self.session.add(credit)
+			await self.session.flush()
 
-		# після commit — чистка кешу
-		r = await get_redis()
-		await r.delete(self._balance_key(user_id))
+			# чистка кешу
+			r = await get_redis()
+			await r.delete(self._balance_key(user_id))
 
 		return credit

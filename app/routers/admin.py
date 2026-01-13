@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import access_admin, get_session
 from app.models import Credits, Transaction, TransactionType
 from app.models.user import User
-from app.models.settings import Settings, AdminLog, AdminOperationType
+from app.models.settings import AdminLog, AdminOperationType
 from app.models.subscription import SubscriptionPlan, Subscription
 from app.schemas.admin import ExchangeRateResponse, ExchangeRateUpdate
 from app.schemas.base import (
@@ -27,7 +27,7 @@ from app.schemas.subscription import (
 
 import logging
 
-from app.utils.common import dump_payload
+from app.utils.common import dump_payload, tier_existing_check, get_base_rate_from_settings
 from app.utils.logging import generate_admin_log_id, get_extra_data_log
 
 logger = logging.getLogger("[ADMIN]")
@@ -67,32 +67,28 @@ async def update_exchange_rate(
         payload: ExchangeRateUpdate,
         session: AsyncSession = Depends(get_session)
 ):
-    settings = await session.execute(select(Settings))
-    settings = settings.scalars().first()
-    if not settings:
-        # створюємо новий запис
-        settings = Settings(base_rate=payload.base_rate)
-        session.add(settings)
-        await session.commit()
-        await session.refresh(settings)
-        return {
+    # завантаження базового курсу конвертації
+    base_rate, created, settings = await get_base_rate_from_settings(session)
+
+    if created:
+        result = {
             "success": True,
             "old_base_rate": 0,
             "new_base_rate": payload.base_rate,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }
+        message = "Created base rate. AdminLog:"
+    else:
+        old_rate = base_rate
+        settings.base_rate = payload.base_rate
+
+        result = {
+            "success": True,
+            "old_base_rate": old_rate,
+            "new_base_rate": settings.base_rate,
             "updated_at": settings.updated_at.isoformat()
         }
-
-    old_rate = settings.base_rate
-    settings.base_rate = payload.base_rate
-    await session.commit()
-    await session.refresh(settings)
-
-    result = {
-        "success": True,
-        "old_base_rate": old_rate,
-        "new_base_rate": settings.base_rate,
-        "updated_at": settings.updated_at.isoformat()
-    }
+        message = "Changed base rate. AdminLog:"
     # create new AdminLog
     operation_type = AdminOperationType.UPDATE_BASE_RATE.value
     new_admin_log = AdminLog(
@@ -104,13 +100,12 @@ async def update_exchange_rate(
     )
 
     session.add(new_admin_log)
-    await session.commit()
-    await session.refresh(new_admin_log)
+    await session.flush()
 
     logger.info(
-        "Changed base rate. AdminLog:", extra=get_extra_data_log(new_admin_log)
+        message, extra=get_extra_data_log(new_admin_log)
     )
-
+    await session.commit()
     return result
 
 
@@ -173,7 +168,6 @@ async def create_subscription_plan(
 
     session.add(new_plan)
     await session.flush()
-    await session.refresh(new_plan)
 
     # create new AdminLog
     operation_type = AdminOperationType.CREATE_PLAN.value
@@ -181,18 +175,19 @@ async def create_subscription_plan(
         id=generate_admin_log_id(operation_type),
         operation_type=operation_type.upper(),
         entity="SubscriptionPlan",
-        entity_id=new_plan.tier,
+        entity_id=payload.tier,
         changes={"success": True, **dump_payload(payload)}
     )
 
     session.add(new_admin_log)
-    await session.commit()
-    await session.refresh(new_admin_log)
+    await session.flush()
+
     logger.info(
         "Created new subscription plan. AdminLog:",
         extra=get_extra_data_log(new_admin_log)
     )
 
+    await session.commit()
     return SubscriptionPlanResponse(success=True, plan=new_plan)
 
 
@@ -235,14 +230,16 @@ async def update_subscription_plan(
         payload: SubscriptionPlanUpdate,
         session: AsyncSession = Depends(get_session)
 ):
-    plan: SubscriptionPlan | None = await session.get(SubscriptionPlan, tier)
-    if not plan:
-        raise HTTPException(status_code=404, detail=f"Plan '{tier}' not found")
+
+    # перевірка tier існує? як що ні: Exception
+    await tier_existing_check(session, tier)
+
+    plan: SubscriptionPlan = await session.get(SubscriptionPlan, tier)
 
     for k, v in payload.model_dump(exclude_unset=True, exclude_none=True).items():
         setattr(plan, k, v)
-        await session.commit()
-        await session.refresh(plan)
+    await session.flush()
+    await session.refresh(plan)
 
     # create new AdminLog
     operation_type = AdminOperationType.UPDATE_PLAN.value
@@ -255,12 +252,12 @@ async def update_subscription_plan(
     )
 
     session.add(new_admin_log)
-    await session.commit()
-    await session.refresh(new_admin_log)
+    await session.flush()
+
     logger.info(
         "Updated subscription plan. AdminLog:", extra=get_extra_data_log(new_admin_log)
     )
-
+    await session.commit()
     return SubscriptionPlanResponse(success=True, plan=plan)
 
 
@@ -302,11 +299,12 @@ async def delete_subscription_plan(
         tier: str,
         session: AsyncSession = Depends(get_session)
 ):
+    # перевірка tier існує? як що ні: Exception
+    await tier_existing_check(session, tier)
+
     plan = await session.get(SubscriptionPlan, tier)
-    if not plan:
-        raise HTTPException(status_code=404, detail=f"Plan '{tier}' not found")
     await session.delete(plan)
-    await session.commit()
+    await session.flush()
 
     # create new AdminLog
     operation_type = AdminOperationType.DELETE_PLAN.value
@@ -314,18 +312,19 @@ async def delete_subscription_plan(
         id=generate_admin_log_id(operation_type),
         operation_type=operation_type.upper(),
         entity="SubscriptionPlan",
-        entity_id=plan.tier,
+        entity_id=tier,
         changes={"success": True}
     )
 
     session.add(new_admin_log)
-    await session.commit()
-    await session.refresh(new_admin_log)
+    await session.flush()
+
     logger.info(
         "Deleted subscription plan. AdminLog:",
         extra=get_extra_data_log(new_admin_log)
     )
 
+    await session.commit()
     return {
         "success": True,
         "message": "Subscription plan deleted",
@@ -429,9 +428,10 @@ async def update_multiplier(
         multiplier: float,
         session: AsyncSession = Depends(get_session)
 ):
+    # перевірка tier існує? як що ні: Exception
+    await tier_existing_check(session, tier)
+
     plan = await session.get(SubscriptionPlan, tier)
-    if not plan:
-        raise HTTPException(status_code=404, detail=f"Plan '{tier}' not found")
 
     old_multiplier = plan.multiplier
     plan.multiplier = multiplier
@@ -442,7 +442,7 @@ async def update_multiplier(
         id=generate_admin_log_id(operation_type),
         operation_type=operation_type.upper(),
         entity="SubscriptionPlan.multiplier",
-        entity_id=plan.tier,
+        entity_id=tier,
         changes={
             "success": True,
             "tier": tier,
@@ -452,13 +452,14 @@ async def update_multiplier(
     )
 
     session.add(new_admin_log)
-    await session.commit()
-    await session.refresh(plan)
-    await session.refresh(new_admin_log)
+    await session.flush()
     logger.info(
         "Updated multiplier. AdminLog:",
         extra=get_extra_data_log(new_admin_log)
     )
+
+    await session.commit()
+    await session.refresh(plan)
 
     return MultiplierUpdateResponse(
         success=True,
@@ -508,9 +509,10 @@ async def update_purchase_rate(
         purchase_rate: float,
         session: AsyncSession = Depends(get_session)
 ):
+    # перевірка tier існує? як що ні: Exception
+    await tier_existing_check(session, tier)
+
     plan = await session.get(SubscriptionPlan, tier)
-    if not plan:
-        raise HTTPException(status_code=404, detail=f"Plan '{tier}' not found")
 
     old_purchase_rate = plan.purchase_rate
     plan.purchase_rate = purchase_rate
@@ -521,7 +523,7 @@ async def update_purchase_rate(
         id=generate_admin_log_id(operation_type),
         operation_type=operation_type.upper(),
         entity="SubscriptionPlan.purchase_rate",
-        entity_id=plan.tier,
+        entity_id=tier,
         changes={
             "success": True,
             "tier": tier,
@@ -530,16 +532,16 @@ async def update_purchase_rate(
         }
     )
 
-    await session.commit()
     session.add(new_admin_log)
-    await session.refresh(plan)
-    await session.refresh(new_admin_log)
+    await session.flush()
 
     logger.info(
         "Updated purchase rate. AdminLog:",
         extra=get_extra_data_log(new_admin_log)
     )
 
+    await session.commit()
+    await session.refresh(plan)
 
     return PurchaseRateUpdateResponse(
         success=True,

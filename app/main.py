@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+
 from app.routers.admin import admin_router
 from app.routers.internal import internal_router
 from app.routers.public import public_router

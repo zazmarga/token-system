@@ -11,12 +11,12 @@ from app.core.dependencies import (
 )
 from app.utils.common import (
     generate_transaction_id, user_existing_check,
-    calculate_credits_amount, get_base_rate_from_settings
+    calculate_credits_amount, get_base_rate_from_settings, tier_existing_check
 )
 from app.utils.idempotency import check_idempotency
 from app.models import (
     Subscription, Transaction, TransactionType,
-    TransactionSource, SubscriptionPlan, Settings
+    TransactionSource, SubscriptionPlan
 )
 from app.schemas.credits import (
     CreditsUserBalanceResponse, CreditsBase, CreditsUserCheckResponse,
@@ -93,6 +93,11 @@ async def create_user_subscription_plan(
     # перевірка user існує? як що ні: Exception
     await user_existing_check(session, user_id)
 
+    tier = payload.subscription_tier
+
+    # перевірка tier існує? як що ні: Exception
+    await tier_existing_check(session, tier)
+
     # Перевіряємо ідемпотентність
     is_duplicate, existing_tx = await check_idempotency(
         session=session,
@@ -103,11 +108,10 @@ async def create_user_subscription_plan(
     if is_duplicate and existing_tx is not None:
         metadata = existing_tx.info
         # Повертаємо той самий результат, що був раніше
-        logger.warning(
-            "Found duplicate transaction: ",
-            extra=get_extra_data_log(existing_tx)
-        )
-        return SubscriptionUpdateResponse(
+        message = "Found duplicate transaction. Existing transaction:"
+        extra_log=get_extra_data_log(existing_tx)
+
+        result = SubscriptionUpdateResponse(
             success=True,
             user_id=existing_tx.user_id,
             previous_tier=metadata.get("previous_tier"),
@@ -117,27 +121,30 @@ async def create_user_subscription_plan(
             multiplier=metadata.get("multiplier"),
             purchase_rate=metadata.get("purchase_rate"),
         )
+    else:
+        # завантажуємо підписку разом із планом
+        result = await session.execute(
+            select(Subscription)
+            .options(selectinload(Subscription.plan))
+            .where(Subscription.user_id == user_id)
+        )
+        user_subscription: Subscription | None = result.scalar_one_or_none()
 
-    # завантажуємо підписку разом із планом
-    result = await session.execute(
-        select(Subscription)
-        .options(selectinload(Subscription.plan))
-        .where(Subscription.user_id == user_id)
-    )
-    user_subscription: Subscription | None = result.scalar_one_or_none()
-
-    # атомарна транзакція
-    async with session.begin_nested():
         if not user_subscription:
             previous_tier = None
             user_subscription = Subscription(
-                user_id=user_id, plan_id=payload.subscription_tier
+                user_id=user_id, plan_id=tier
             )
             session.add(user_subscription)
-            plan = await session.get(SubscriptionPlan, payload.subscription_tier)
+            plan = await session.get(SubscriptionPlan, tier)
         else:
+            if user_subscription.plan.tier == tier:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"CONFLICT: User '{user_id}' has the same tier '{tier}'.",
+                )
             previous_tier = user_subscription.plan.tier
-            user_subscription.plan_id = payload.subscription_tier
+            user_subscription.plan_id = tier
             plan = user_subscription.plan
 
         # кредити
@@ -148,7 +155,7 @@ async def create_user_subscription_plan(
         )
         balance_after = user_credit.balance
 
-        new_tier = payload.subscription_tier
+        new_tier = tier
         multiplier = plan.multiplier
         purchase_rate = plan.purchase_rate
         credits_to_add = payload.credits_to_add
@@ -174,26 +181,30 @@ async def create_user_subscription_plan(
                 "purchase_rate": float(purchase_rate),
             }
         )
+        session.add(new_tx)
+        await session.flush()
 
-        logger.info(
-            f"Updated credits. Transaction:",
-            extra=get_extra_data_log(new_tx)
+        message = "Updated credits. Transaction:"
+        extra_log = get_extra_data_log(new_tx)
+
+        result = SubscriptionUpdateResponse(
+            success=True,
+            user_id=user_id,
+            previous_tier=previous_tier,
+            new_tier=new_tier,
+            credits_added=credits_to_add,
+            new_balance=balance_after,
+            multiplier=multiplier,
+            purchase_rate=purchase_rate
         )
 
-        session.add(new_tx)
-        session.add(new_tx)
-        await session.commit()
-
-    return SubscriptionUpdateResponse(
-        success=True,
-        user_id=user_id,
-        previous_tier=previous_tier,
-        new_tier=new_tier,
-        credits_added=credits_to_add,
-        new_balance=balance_after,
-        multiplier=multiplier,
-        purchase_rate=purchase_rate
+    logger.info(
+        message,
+        extra=extra_log
     )
+
+    await session.commit()
+    return result
 
 
 @internal_router.get(
@@ -432,11 +443,10 @@ async def user_credits_add(
     if is_duplicate and existing_tx is not None:
         metadata = existing_tx.info
         # Повертаємо той самий результат, що був раніше
-        logger.warning(
-            "Found duplicate transaction: ",
-            extra=get_extra_data_log(existing_tx)
-        )
-        return CreditsAddResponse(
+        message = "Found duplicate transaction. Existing transaction:"
+        extra_log = get_extra_data_log(existing_tx)
+
+        result =  CreditsAddResponse(
             success=True,
             transaction_id=existing_tx.id,
             user_id=existing_tx.user_id,
@@ -447,89 +457,88 @@ async def user_credits_add(
             balance_after=existing_tx.balance_after,
             operation_id=existing_tx.operation_id
         )
+    else:
+        # завантажуємо підписку разом із планом
+        result = await session.execute(
+            select(Subscription)
+            .options(selectinload(Subscription.plan))
+            .where(Subscription.user_id == user_id)
+        )
+        subscription: Subscription | None = result.scalar_one_or_none()
 
-    # завантажуємо підписку разом із планом
-    result = await session.execute(
-        select(Subscription)
-        .options(selectinload(Subscription.plan))
-        .where(Subscription.user_id == user_id)
+        if not subscription:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Not found: user '{user_id}' does not have subscription.",
+            )
+        purchase_rate = float(subscription.plan.purchase_rate)
+
+        # завантаження базового курсу конвертації
+        base_rate, _, _ = await get_base_rate_from_settings(session)
+
+        # розрахунок суми кредитів з урахуванням бонусу підписки
+        amount_usd = payload.amount_usd
+        credits_added = round(amount_usd * purchase_rate * base_rate)
+
+        # кредити
+        user_credits = await balance_service.get_credits(user_id)
+        balance_before = user_credits.balance
+
+        # оновити кредити та створити транзакцію
+        async with session.begin_nested():
+            # оновити кредити
+            user_credits = await balance_service.update_credits(
+                user_id, credits_added
+            )
+            balance_after = user_credits.balance
+
+            id_tx = generate_transaction_id(operation_id)
+
+            meta = payload.metadata.dict() if hasattr(payload.metadata, "dict") else (payload.metadata or {})
+            info = {"purchase_rate": float(purchase_rate), **meta}
+
+            # транзакція
+            new_tx = Transaction(
+                id=id_tx,
+                user_id=user_id,
+                operation_id=operation_id,
+                type=TransactionType.ADD,
+                source=TransactionSource.PURCHASE,
+                amount_usd=amount_usd,
+                credits=credits_added,
+                balance_before=balance_before,
+                balance_after=balance_after,
+                description=payload.description,
+                created_at=datetime.now(timezone.utc),
+                info=info
+            )
+
+            session.add(new_tx)
+            await session.flush()
+
+            message = "Updated credits. Transaction::"
+            extra_log = get_extra_data_log(new_tx)
+
+            result = CreditsAddResponse(
+                success=True,
+                transaction_id=new_tx.id,
+                user_id=user_id,
+                amount_usd=amount_usd,
+                credits_added=credits_added,
+                purchase_rate=purchase_rate,
+                balance_before=balance_before,
+                balance_after=balance_after,
+                operation_id=operation_id
+            )
+
+    await session.commit()
+
+    logger.info(
+        message,
+        extra=extra_log
     )
-    subscription: Subscription | None = result.scalar_one_or_none()
 
-    if not subscription:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Not found: user '{user_id}' does not have subscription.",
-        )
-    purchase_rate = float(subscription.plan.purchase_rate)
-
-    # завантаження базового курсу конвертації
-    settings = await session.execute(select(Settings))
-    settings = settings.scalars().first()
-    if not settings:
-        settings = Settings()
-        session.add(settings)
-        await session.commit()
-    base_rate = settings.base_rate
-
-    # розрахунок суми кредитів з урахуванням бонусу підписки
-    amount_usd = payload.amount_usd
-    credits_added = round(amount_usd * purchase_rate * base_rate)
-
-    # кредити
-    user_credits = await balance_service.get_credits(user_id)
-    balance_before = user_credits.balance
-
-    # оновити кредити та створити транзакцію
-    async with session.begin_nested():
-        # оновити кредити
-        user_credits = await balance_service.update_credits(
-            user_id, credits_added
-        )
-        balance_after = user_credits.balance
-
-        id_tx = generate_transaction_id(operation_id)
-
-        meta = payload.metadata
-        if hasattr(meta, "dict"):
-            meta = meta.dict()
-        info = {"purchase_rate": float(purchase_rate)} | meta
-
-        # транзакція
-        new_tx = Transaction(
-            id=id_tx,
-            user_id=user_id,
-            operation_id=operation_id,
-            type=TransactionType.ADD,
-            source=TransactionSource.PURCHASE,
-            amount_usd=amount_usd,
-            credits=credits_added,
-            balance_before=balance_before,
-            balance_after=balance_after,
-            description=payload.description,
-            created_at=datetime.now(timezone.utc),
-            info=info
-        )
-
-        logger.info(
-            f"Updated credits. Transaction:",
-            extra=get_extra_data_log(new_tx)
-        )
-
-        session.add(new_tx)
-        await session.commit()
-
-    return CreditsAddResponse(
-        success=True,
-        transaction_id=new_tx.id,
-        user_id=user_id,
-        amount_usd=amount_usd,
-        credits_added=credits_added,
-        purchase_rate=purchase_rate,
-        balance_before=balance_before,
-        balance_after=balance_after,
-        operation_id=operation_id
-    )
+    return result
 
 
 @internal_router.post(
@@ -601,7 +610,7 @@ async def user_credits_calculate(
     _, multiplier = row
 
     # отримати базову ставку
-    base_rate = await get_base_rate_from_settings(session)
+    base_rate, _, _ = await get_base_rate_from_settings(session)
 
     # отримати баланс
     user_credits = await balance_service.get_credits(user_id)
@@ -705,11 +714,10 @@ async def user_credits_charge(
 
     if is_duplicate and existing_tx is not None:
         # Повертаємо той самий результат, що був раніше
-        logger.warning(
-            "Found duplicate transaction: ",
-            extra=get_extra_data_log(existing_tx)
-        )
-        return CreditsChargeSuccessResponse(
+        message = "Found duplicate transaction. Existing transaction:"
+        extra_log = get_extra_data_log(existing_tx)
+
+        result_back = CreditsChargeSuccessResponse(
             transaction_id=existing_tx.id,
             user_id=existing_tx.user_id,
             cost_usd=existing_tx.cost_usd,
@@ -718,66 +726,75 @@ async def user_credits_charge(
             balance_after=existing_tx.balance_after,
             operation_id=operation_id
         )
+    else:
+        # отримати базову ставку
+        base_rate, _, _ = await get_base_rate_from_settings(session)
 
-    # отримати базову ставку
-    base_rate = await get_base_rate_from_settings(session)
+        # отримати баланс
+        user_credits_before = await balance_service.get_credits(user_id)
+        balance_before_charge = user_credits_before.balance
 
-    # отримати баланс
-    user_credits_before = await balance_service.get_credits(user_id)
-    balance_before_charge = user_credits_before.balance
+        # розрахувати кредити до списання
+        cost_usd = payload.cost_usd
+        multiplier = float(multiplier)
+        credits_to_charge = calculate_credits_amount(cost_usd, multiplier, base_rate)
 
-    # розрахувати кредити до списання
-    cost_usd = payload.cost_usd
-    multiplier = float(multiplier)
-    credits_to_charge = calculate_credits_amount(cost_usd, multiplier, base_rate)
+        if (balance_before_charge - credits_to_charge) < 0:
+            message = "Insufficient user credits"
+            extra_log = {}
 
-    if (balance_before_charge - credits_to_charge) < 0:
-        return CreditsChargeNoSuccessResponse(
-            error="insufficient_credits",
-            user_id=user_id,
-            required_credits=credits_to_charge,
-            current_balance=balance_before_charge,
-            deficit=(credits_to_charge - balance_before_charge)
-        )
+            result_back = CreditsChargeNoSuccessResponse(
+                error="insufficient_credits",
+                user_id=user_id,
+                required_credits=credits_to_charge,
+                current_balance=balance_before_charge,
+                deficit=(credits_to_charge - balance_before_charge)
+            )
+        else:
+            # atomic operation (!) here: txn, credits
+            async with session.begin_nested():
+                # списати кредити з балансу user (update credits)
+                user_credits = await balance_service.update_credits(
+                    user_id, -credits_to_charge
+                )
+                new_balance = user_credits.balance
 
-    # atomic operation (!) here: txn, credits
-    async with session.begin_nested():
-        # списати кредити з балансу user (update credits)
-        user_credits = await balance_service.update_credits(
-            user_id, -credits_to_charge
-        )
-        new_balance = user_credits.balance
+                # створити транзакцію
+                id_tx = generate_transaction_id(operation_id)
+                new_tx = Transaction(
+                    id=id_tx,
+                    user_id=user_id,
+                    operation_id=operation_id,
+                    type=TransactionType.CHARGE,
+                    cost_usd=cost_usd,
+                    credits=-credits_to_charge,
+                    balance_before=balance_before_charge,
+                    balance_after=new_balance,
+                    description=payload.description,
+                    created_at=datetime.now(timezone.utc),
+                    info=payload.metadata or {}
+                )
 
-        # створити транзакцію
-        id_tx = generate_transaction_id(operation_id)
-        new_tx = Transaction(
-            id=id_tx,
-            user_id=user_id,
-            operation_id=operation_id,
-            type=TransactionType.CHARGE,
-            cost_usd=cost_usd,
-            credits=-credits_to_charge,
-            balance_before=balance_before_charge,
-            balance_after=new_balance,
-            description=payload.description,
-            created_at=datetime.now(timezone.utc),
-            info=payload.metadata
-        )
+                session.add(new_tx)
+                await session.flush()
 
-        logger.info(
-            f"Updated credits. Transaction:",
-            extra=get_extra_data_log(new_tx)
-        )
+                message = "Updated credits. Transaction:"
+                extra_log = get_extra_data_log(new_tx)
 
-        session.add(new_tx)
-        await session.commit()
+                result_back = CreditsChargeSuccessResponse(
+                    transaction_id=id_tx,
+                    user_id=user_id,
+                    cost_usd=cost_usd,
+                    credits_charged=credits_to_charge,
+                    balance_before=balance_before_charge,
+                    balance_after=new_balance,
+                    operation_id=operation_id
+                )
 
-    return CreditsChargeSuccessResponse(
-        transaction_id=id_tx,
-        user_id=user_id,
-        cost_usd=cost_usd,
-        credits_charged=credits_to_charge,
-        balance_before=balance_before_charge,
-        balance_after=new_balance,
-        operation_id=operation_id
+    logger.info(
+        message,
+        extra=extra_log
     )
+    await session.commit()
+
+    return result_back

@@ -16,9 +16,6 @@ class Settings(Base):
 		DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
 	)
 
-	# інкремент для генерації unique operation_id
-	current_operation_id = Column(Integer, default=123)
-
 
 # AdminLog модель зберігає зміни, що зроблено Admin у DB
 class AdminOperationType(enum.Enum):
@@ -37,5 +34,5 @@ class AdminLog(Base):
 	operation_type = Column(AlchemyEnum(AdminOperationType), nullable=False)
 	entity = Column(String, nullable=False)  # object: "Settings", "SubscriptionPlan", ...
 	entity_id = Column(String, nullable=True)  # object_id: ID (якщо є)
-	changes = Column(JSON, nullable=False)  # {"field": "base_rate", "old": 10000, "new": 12000}
+	changes = Column(JSON, nullable=False)  # {"field": "base_rate", "old": 100, "new": 120}
 	created_at = Column(DateTime(timezone=True), server_default=func.now())

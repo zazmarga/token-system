@@ -16,8 +16,10 @@ from app.schemas.subscription import (
     SubscriptionPlanPublicDetail
 )
 from app.schemas.transactions import TransactionPublicPaginatedList
-from app.utils.common import generate_operation_id, is_payment_complete
+from app.utils.common import is_payment_complete
 from app.utils.http_client import call_internal_api
+from app.utils.idempotency import check_idempotency
+from app.utils.logging import get_extra_data_log
 from app.utils.service_balance import BalanceService
 
 import logging
@@ -101,8 +103,8 @@ async def credits_purchase_by_user(
         payload: CreditsPurchasePayload,
         user_id: str = Depends(get_current_user),
         session: AsyncSession = Depends(get_session)
-
 ):
+
     source = TransactionSource.PURCHASE.value
 
     if not is_payment_complete(payload.payment_method_id):
@@ -111,31 +113,56 @@ async def credits_purchase_by_user(
             detail=f"Payment '{payload.payment_method_id}' not completed."
         )
 
-    operation_id = await generate_operation_id(session, source=source)
+    # створення operation_id
+    # operation_id = generate_operation_id(source=source)   ????????????????????
+    # створене демонстрації роботи тестового у public API
+    operation_id = f"op_user_{payload.payment_method_id}"
 
-    internal_payload = {
-        "user_id": user_id,
-        "amount_usd": payload.amount_usd,
-        "source": source,
-        "operation_id": operation_id,
-        "description": "Credit purchase",
-        "metadata": {"payment_method_id": payload.payment_method_id}
-    }
-
-    logger.info("Credits purchase by user. Request: ", extra=internal_payload)
-
-    internal_result = await call_internal_api(
-        "/api/internal/credits/add", internal_payload)
-
-    logger.info("Changed credits. Response:", extra=internal_result)
-
-    return CreditsPurchaseResponse(
-        success=True,
-        transaction_id=internal_result["transaction_id"],
-        amount_usd=payload.amount_usd,
-        credits_added=internal_result["credits_added"],
-        new_balance=internal_result["balance_after"]
+    # Перевіряємо ідемпотентність
+    is_duplicate, existing_tx = await check_idempotency(
+        session=session,
+        operation_id=operation_id,
+        expected_type=TransactionType.ADD.value
     )
+    if is_duplicate and existing_tx is not None:
+        # Повертаємо той самий результат, що був раніше
+        logger.info(
+            "Found duplicate transaction. Existing transaction:",
+            extra=get_extra_data_log(existing_tx)
+        )
+        result = CreditsPurchaseResponse(
+            success=True,
+            transaction_id=existing_tx.id,
+            amount_usd=payload.amount_usd,
+            credits_added=existing_tx.credits,
+            new_balance=existing_tx.balance_after
+        )
+    else:
+        internal_payload = {
+            "user_id": user_id,
+            "amount_usd": payload.amount_usd,
+            "source": source,
+            "operation_id": operation_id,
+            "description": "Credit purchase",
+            "metadata": {"payment_method_id": payload.payment_method_id}
+        }
+
+        logger.info("Credits purchase by user. Request: ", extra=internal_payload)
+
+        internal_result = await call_internal_api(
+            "/api/internal/credits/add", internal_payload)
+
+        logger.info("Changed credits. Response:", extra=internal_result)
+
+        result = CreditsPurchaseResponse(
+            success=True,
+            transaction_id=internal_result["transaction_id"],
+            amount_usd=payload.amount_usd,
+            credits_added=internal_result["credits_added"],
+            new_balance=internal_result["balance_after"]
+        )
+
+    return result
 
 
 @public_router.get(

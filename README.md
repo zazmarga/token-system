@@ -105,13 +105,23 @@
 
 Це робиться одноразово для створення базової схеми.
 
+### Створіть хоча б одного користувача
+`docker exec -it token_system-db-1 psql -U postgres -d token_system`
+
+`INSERT INTO "users" (id) VALUES ('user_111');`
+
+**user_111** - буде використано для перевірки **Authorization: Bearer my-secret-user-token**
+
 ### Відкриті Token System API
 
 http://localhost:8000/docs
 
-
+1) додати base_rate  (default=10_000)
+2) додати subscription plan
+3) змінити subscription plan користувача
+4) ...
 
 #### Запуск tests/
-дуже спрощене тестування 
+дуже спрощене тестування, тільки зовнішній вигляд деяких GET API 
 
 `docker exec -it token_system-api-1 pytest tests/ -v`
